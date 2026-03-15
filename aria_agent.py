@@ -147,8 +147,7 @@ def build_system_prompt(biz_ctx: dict, memories: list[str], location: str) -> st
     # Services list
     svc_lines = ""
     if svcs:
-        svc_lines = "
-".join([
+        svc_lines = "\n".join([
             f"  • {s['name']}" +
             (f" — {s['duration_minutes']} min" if s.get('duration_minutes') else "") +
             (f", ${s['price']}" if s.get('price') else "")
@@ -158,14 +157,12 @@ def build_system_prompt(biz_ctx: dict, memories: list[str], location: str) -> st
     # Staff list
     staff_lines = ""
     if staff:
-        staff_lines = "
-".join([f"  • {s['name']}" + (f" ({s['role']})" if s.get('role') else "") for s in staff])
+        staff_lines = "\n".join([f"  • {s['name']}" + (f" ({s['role']})" if s.get('role') else "") for s in staff])
 
     # Location
     loc_lines = ""
     if locs:
-        loc_lines = "
-".join([f"  • {l['name']}: {l.get('address','')}" + (f" | {l['phone']}" if l.get('phone') else "") for l in locs])
+        loc_lines = "\n".join([f"  • {l['name']}: {l.get('address','')}" + (f" | {l['phone']}" if l.get('phone') else "") for l in locs])
 
     # Business hours from ai_settings
     hours_text = ""
@@ -175,13 +172,11 @@ def build_system_prompt(biz_ctx: dict, memories: list[str], location: str) -> st
             hours = ai_set["business_hours"]
             if isinstance(hours, str):
                 hours = _json.loads(hours)
-            hours_text = "
-".join([f"  {day}: {times}" for day, times in hours.items()])
+            hours_text = "\n".join([f"  {day}: {times}" for day, times in hours.items()])
         except Exception:
             pass
 
-    mem_text = "
-".join(memories) if memories else "Nothing saved yet — start learning!"
+    mem_text = "\n".join(memories) if memories else "Nothing saved yet — start learning!"
     loc_text = location or "location unknown"
 
     return f"""You are Aria, the exceptionally warm, welcoming, and upbeat AI receptionist for {business_name}, built by Receptionist.co.
