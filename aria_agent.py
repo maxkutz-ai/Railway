@@ -378,16 +378,20 @@ async def entrypoint(ctx: JobContext):
         pool = jokes.get(category, jokes["general"])
         return json.dumps({"joke": random.choice(pool)})
 
-    # ── Create session with OpenAI Realtime + Simli avatar ───────────────────
+    # ── Create session: OpenAI Realtime (text-only) + OpenAI TTS shimmer ────────
+    # WHY text-only mode:
+    #   audio_output=True  → OpenAI audio plays immediately, Simli video arrives
+    #                         200-400ms later → lips always lag behind voice
+    #   text-only + TTS    → Simli receives the TTS audio and generates video from
+    #                         the SAME source → perfect A/V sync guaranteed
+    #
+    # Pipeline: user mic → OpenAI Realtime (STT+LLM, text output only)
+    #           → openai.TTS(shimmer) → Simli AvatarSession → synced video+audio
     session = AgentSession(
-        # OpenAI Realtime API — handles STT + LLM + TTS in one low-latency pipeline
         llm=openai.realtime.RealtimeModel(
             model="gpt-4o-realtime-preview",
-            voice="shimmer",
             instructions=instructions,
-            # server_vad is the only type OpenAI Realtime API supports.
-            # semantic_vad silently falls back to aggressive 500ms cutoff.
-            # 1080ms gives a natural pause before Aria responds.
+            modalities=["text"],   # text-only — no audio from OpenAI Realtime
             turn_detection=TurnDetection(
                 type="server_vad",
                 threshold=0.5,
@@ -395,6 +399,12 @@ async def entrypoint(ctx: JobContext):
                 silence_duration_ms=1080,
             ),
             temperature=0.8,
+        ),
+        # OpenAI TTS with shimmer voice — same voice as before, now perfectly synced
+        tts=openai.TTS(
+            model="gpt-4o-mini-tts",
+            voice="shimmer",
+            instructions="Speak with a warm, bright, energetic smile. Be enthusiastic and natural.",
         ),
     )
 
@@ -415,12 +425,6 @@ async def entrypoint(ctx: JobContext):
         agent=agents.Agent(
             instructions=instructions,
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
-        ),
-        # audio_output=True: use OpenAI shimmer voice (better quality than Simli's TTS).
-        # Simli handles video/lip-sync only. There may be slight A/V offset but
-        # voice quality is significantly better.
-        room_options=room_io.RoomOptions(
-            audio_output=True,
         ),
     )
 
