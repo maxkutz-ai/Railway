@@ -287,7 +287,7 @@ async def entrypoint(ctx: JobContext):
                 type="server_vad",
                 threshold=0.5,
                 prefix_padding_ms=300,
-                silence_duration_ms=2000, # Bump to 2 full seconds
+                silence_duration_ms=1080,
             ),
             temperature=0.8,
         ),
@@ -318,6 +318,11 @@ async def entrypoint(ctx: JobContext):
         room_options=room_io.RoomOptions(
             audio_output=False,
         ),
+    )
+
+    # Greet immediately — don't wait for user to speak first
+    await session.generate_reply(
+        instructions="Greet the user warmly and offer your assistance. Be brief and energetic."
     )
 
     logger.info(f"Aria session started for {business_name} (room: {ctx.room.name})")
