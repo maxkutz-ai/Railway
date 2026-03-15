@@ -280,14 +280,14 @@ async def entrypoint(ctx: JobContext):
             model="gpt-4o-realtime-preview",
             voice="shimmer",
             instructions=instructions,
-            # Semantic VAD: uses meaning of words to detect turn end — less likely
-            # to interrupt Aria mid-sentence than server VAD with silence threshold.
-            # interrupt_response=False prevents mic bleed from cutting Aria off.
+            # server_vad is the only type OpenAI Realtime API supports.
+            # semantic_vad silently falls back to aggressive 500ms cutoff.
+            # 1080ms gives a natural pause before Aria responds.
             turn_detection=TurnDetection(
-                type="semantic_vad",
-                eagerness="low",        # lets Aria finish full sentences before responding
-                create_response=True,
-                interrupt_response=False,  # don't interrupt — prevents mid-sentence cutoff
+                type="server_vad",
+                threshold=0.5,
+                prefix_padding_ms=300,
+                silence_duration_ms=1080,
             ),
             temperature=0.8,
         ),
