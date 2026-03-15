@@ -270,7 +270,7 @@ async def entrypoint(ctx: JobContext):
             voice="shimmer",
             instructions=instructions,
             turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.5,
+                threshold=0.8,       # HIGH threshold — ignores Simli avatar audio feedback
                 prefix_padding_ms=300,
                 silence_duration_ms=1080,
             ),
