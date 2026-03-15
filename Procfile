@@ -1,0 +1,1 @@
+worker: python aria_agent.py start
