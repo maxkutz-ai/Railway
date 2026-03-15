@@ -302,14 +302,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    import sys
-    from livekit.agents import WorkerOptions
-    agents.cli.run_app(
-        server,
-        WorkerOptions(
-            ws_url=os.getenv("LIVEKIT_URL", ""),
-            api_key=os.getenv("LIVEKIT_API_KEY", ""),
-            api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
-            num_idle_processes=1,  # only 1 warm process — reduces cost significantly
-        ),
-    )
+    agents.cli.run_app(server)
