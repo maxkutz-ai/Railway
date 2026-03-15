@@ -29,7 +29,7 @@ import httpx
 from supabase import create_client, Client
 
 from livekit import agents
-from livekit.agents import AgentServer, AgentSession, JobContext, RunContext, function_tool
+from livekit.agents import AgentServer, AgentSession, JobContext, RunContext, function_tool, room_io
 from livekit.plugins import openai, silero, simli
 from openai.types.beta.realtime.session import TurnDetection
 from openai.types.beta.realtime.session import TurnDetection
@@ -310,6 +310,13 @@ async def entrypoint(ctx: JobContext):
         agent=agents.Agent(
             instructions=instructions,
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
+        ),
+        # CRITICAL: Disable agent's instant audio output.
+        # Without this, browser hears OpenAI audio immediately while Simli video
+        # arrives 200-400ms later — lips look like they're "catching up".
+        # With audio_output=False, only Simli's perfectly synced audio+video plays.
+        room_options=room_io.RoomOptions(
+            audio_output=False,
         ),
     )
 
