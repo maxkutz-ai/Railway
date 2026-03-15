@@ -416,12 +416,11 @@ async def entrypoint(ctx: JobContext):
             instructions=instructions,
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
         ),
-        # CRITICAL: Disable agent's instant audio output.
-        # Without this, browser hears OpenAI audio immediately while Simli video
-        # arrives 200-400ms later — lips look like they're "catching up".
-        # With audio_output=False, only Simli's perfectly synced audio+video plays.
+        # audio_output=True: use OpenAI shimmer voice (better quality than Simli's TTS).
+        # Simli handles video/lip-sync only. There may be slight A/V offset but
+        # voice quality is significantly better.
         room_options=room_io.RoomOptions(
-            audio_output=False,
+            audio_output=True,
         ),
     )
 
