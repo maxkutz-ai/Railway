@@ -287,7 +287,7 @@ async def entrypoint(ctx: JobContext):
                 type="server_vad",
                 threshold=0.5,
                 prefix_padding_ms=300,
-                silence_duration_ms=1080,
+                silence_duration_ms=2000, # Bump to 2 full seconds
             ),
             temperature=0.8,
         ),
