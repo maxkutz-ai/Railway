@@ -31,6 +31,8 @@ from supabase import create_client, Client
 from livekit import agents
 from livekit.agents import AgentServer, AgentSession, JobContext, RunContext, function_tool
 from livekit.plugins import openai, silero, simli
+from openai.types.beta.realtime.session import TurnDetection
+from openai.types.beta.realtime.session import TurnDetection
 
 logger = logging.getLogger("aria-agent")
 
@@ -128,11 +130,20 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
-    # Room metadata contains business_id passed from the token API
-    metadata = json.loads(ctx.room.metadata or "{}")
-    business_id = metadata.get("business_id", "")
-    business_name = metadata.get("business_name", "the business")
-    location = metadata.get("location", "")
+    # Connect to room first — metadata and participants available after connect
+    await ctx.connect()
+
+    # Read room metadata set by the Next.js token API
+    try:
+        metadata = json.loads(ctx.room.metadata or "{}")
+    except Exception:
+        metadata = {}
+
+    business_id   = metadata.get("business_id", "")
+    business_name = metadata.get("business_name", "Southampton Spa")
+    location      = metadata.get("location", "")
+
+    logger.info(f"Session started: business={business_name} id={business_id} location={location}")
 
     # Load persistent memories
     memories = await load_memories(business_id)
@@ -269,10 +280,14 @@ async def entrypoint(ctx: JobContext):
             model="gpt-4o-realtime-preview",
             voice="shimmer",
             instructions=instructions,
-            turn_detection=openai.realtime.ServerVadOptions(
-                threshold=0.8,       # HIGH threshold — ignores Simli avatar audio feedback
-                prefix_padding_ms=300,
-                silence_duration_ms=1080,
+            # Semantic VAD: uses meaning of words to detect turn end — less likely
+            # to interrupt Aria mid-sentence than server VAD with silence threshold.
+            # interrupt_response=False prevents mic bleed from cutting Aria off.
+            turn_detection=TurnDetection(
+                type="semantic_vad",
+                eagerness="low",        # lets Aria finish full sentences before responding
+                create_response=True,
+                interrupt_response=False,  # don't interrupt — prevents mid-sentence cutoff
             ),
             temperature=0.8,
         ),
