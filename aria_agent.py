@@ -30,7 +30,6 @@ from supabase import create_client, Client
 
 from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, function_tool
 from livekit.plugins import openai, silero, simli
-from openai.types.beta.realtime.session import TurnDetection
 
 logger = logging.getLogger("aria-agent")
 
@@ -374,21 +373,14 @@ async def entrypoint(ctx: JobContext):
         pool = jokes.get(category, jokes["general"])
         return json.dumps({"joke": random.choice(pool)})
 
-    # ── Create session — exactly as per Simli's official LiveKit docs ────────────
-    # Using full audio mode (voice="shimmer") — Simli's AvatarSession handles A/V sync.
+    # ── Modular Pipeline: STT -> LLM -> TTS ─────────────────────────────────────
+    # Fixes DTX frozen-mouth bug. openai.TTS pads silence so Simli always gets
+    # the close-mouth signal. Silero VAD waits 1.5s before responding.
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            model="gpt-4o-realtime-preview",
-            voice="shimmer",
-            instructions=instructions,
-            turn_detection=TurnDetection(
-                type="server_vad",
-                threshold=0.5,
-                prefix_padding_ms=300,
-                silence_duration_ms=1080,
-            ),
-            temperature=0.8,
-        ),
+        stt=openai.STT(model="whisper-1", language="en"),
+        llm=openai.LLM(model="gpt-4o", temperature=0.8),
+        tts=openai.TTS(voice="shimmer"),
+        vad=silero.VAD.load(min_silence_duration=1.5),
     )
 
     # ── Simli avatar — server-side, perfect A/V sync ──────────────────────────
