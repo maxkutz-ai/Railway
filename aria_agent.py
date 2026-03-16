@@ -28,7 +28,7 @@ from typing import Optional
 import httpx
 from supabase import create_client, Client
 
-from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, function_tool
+from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, function_tool, room_io
 from livekit.plugins import openai, silero, simli
 
 logger = logging.getLogger("aria-agent")
@@ -402,6 +402,8 @@ async def entrypoint(ctx: JobContext):
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
         ),
         room=ctx.room,
+        # CRITICAL: disable agent raw audio — let Simli publish the synced A/V instead
+        room_options=room_io.RoomOptions(audio_output=False),
     )
 
     # Greet immediately — don't wait for user to speak first
