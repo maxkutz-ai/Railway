@@ -29,7 +29,7 @@ import httpx
 from supabase import create_client, Client
 
 from livekit import agents
-from livekit.agents import AgentServer, AgentSession, JobContext, RunContext, function_tool, room_io
+from livekit.agents import AgentSession, JobContext, RunContext, function_tool, cli
 from livekit.plugins import openai, silero, simli
 from openai.types.beta.realtime.session import TurnDetection
 from openai.types.beta.realtime.session import TurnDetection
@@ -64,9 +64,10 @@ async def load_business_context(business_id: str) -> dict:
             results["config"] = cfg.data
 
         # AI settings (hours, booking rules)
-        ai_set = sb.from_("ai_settings").select("business_hours,booking_rules,greeting_text,sms_template_missed_call").eq("business_id", business_id).single().execute()
+        ai_set = sb.from_("ai_settings").select("business_hours,booking_rules,greeting_text").eq("business_id", business_id).single().execute()
         if ai_set.data:
             results["ai_settings"] = ai_set.data
+            logger.info(f"AI settings loaded: business_hours={'present' if ai_set.data.get('business_hours') else 'EMPTY'}")
 
         # Services offered
         svcs = sb.from_("services").select("name,duration_minutes,price,category").eq("business_id", business_id).eq("is_active", True).execute()
@@ -83,10 +84,11 @@ async def load_business_context(business_id: str) -> dict:
         if locs.data:
             results["locations"] = locs.data
 
-        # AI memories
-        mems = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", business_id).order("updated_at", desc=True).limit(60).execute()
+        # AI memories — load all categories including business rules/hours
+        mems = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", business_id).order("updated_at", desc=True).limit(100).execute()
         if mems.data:
             results["memories"] = mems.data
+            logger.info(f"Loaded {len(mems.data)} memories for {business_id}")
 
         return results
     except Exception as e:
@@ -223,10 +225,6 @@ LANGUAGE: English only. No markdown in speech."""
 
 
 # ── Agent entry point ─────────────────────────────────────────────────────────
-server = AgentServer()
-
-
-@server.rtc_session()
 async def entrypoint(ctx: JobContext):
     # Connect to room first — metadata and participants available after connect
     await ctx.connect()
@@ -378,20 +376,13 @@ async def entrypoint(ctx: JobContext):
         pool = jokes.get(category, jokes["general"])
         return json.dumps({"joke": random.choice(pool)})
 
-    # ── Create session: OpenAI Realtime (text-only) + OpenAI TTS shimmer ────────
-    # WHY text-only mode:
-    #   audio_output=True  → OpenAI audio plays immediately, Simli video arrives
-    #                         200-400ms later → lips always lag behind voice
-    #   text-only + TTS    → Simli receives the TTS audio and generates video from
-    #                         the SAME source → perfect A/V sync guaranteed
-    #
-    # Pipeline: user mic → OpenAI Realtime (STT+LLM, text output only)
-    #           → openai.TTS(shimmer) → Simli AvatarSession → synced video+audio
+    # ── Create session — exactly as per Simli's official LiveKit docs ────────────
+    # Using full audio mode (voice="shimmer") — Simli's AvatarSession handles A/V sync.
     session = AgentSession(
         llm=openai.realtime.RealtimeModel(
             model="gpt-4o-realtime-preview",
+            voice="shimmer",
             instructions=instructions,
-            modalities=["text"],   # text-only — no audio from OpenAI Realtime
             turn_detection=TurnDetection(
                 type="server_vad",
                 threshold=0.5,
@@ -399,12 +390,6 @@ async def entrypoint(ctx: JobContext):
                 silence_duration_ms=1080,
             ),
             temperature=0.8,
-        ),
-        # OpenAI TTS with shimmer voice — same voice as before, now perfectly synced
-        tts=openai.TTS(
-            model="gpt-4o-mini-tts",
-            voice="shimmer",
-            instructions="Speak with a warm, bright, energetic smile. Be enthusiastic and natural.",
         ),
     )
 
@@ -420,12 +405,13 @@ async def entrypoint(ctx: JobContext):
     # Start avatar first, then session
     await avatar.start(session, room=ctx.room)
 
+    # Start session — per Simli's docs, no room_options needed
     await session.start(
-        room=ctx.room,
         agent=agents.Agent(
             instructions=instructions,
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
         ),
+        room=ctx.room,
     )
 
     # Greet immediately — don't wait for user to speak first
@@ -437,4 +423,7 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(server)
+    from livekit.agents import WorkerOptions
+    agents.cli.run_app(
+        WorkerOptions(entrypoint_fnc=entrypoint)
+    )
