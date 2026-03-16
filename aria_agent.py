@@ -28,10 +28,8 @@ from typing import Optional
 import httpx
 from supabase import create_client, Client
 
-from livekit import agents
-from livekit.agents import AgentSession, JobContext, RunContext, function_tool, cli
+from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, function_tool
 from livekit.plugins import openai, silero, simli
-from openai.types.beta.realtime.session import TurnDetection
 from openai.types.beta.realtime.session import TurnDetection
 
 logger = logging.getLogger("aria-agent")
@@ -407,7 +405,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start session — per Simli's docs, no room_options needed
     await session.start(
-        agent=agents.Agent(
+        agent=Agent(
             instructions=instructions,
             tools=[save_memory, get_weather, get_datetime, calculate, web_search, tell_joke],
         ),
@@ -423,7 +421,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    from livekit.agents import WorkerOptions
-    agents.cli.run_app(
-        WorkerOptions(entrypoint_fnc=entrypoint)
-    )
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
