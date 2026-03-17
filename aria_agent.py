@@ -372,6 +372,152 @@ async def search_dropbox(access_token: str, query: str, max_results: int = 5) ->
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
+INDUSTRY_SCRIPTS = {
+    "spa": {
+        "style": "luxurious, calming, warm — like a 5-star spa concierge",
+        "skills": "booking massages/facials/nails, upselling packages, gift cards, membership sales, pre/post care advice",
+        "urgency": "low — relaxation focused, never rushed",
+        "phrases": ["You deserve this", "Let me check availability for you", "Our therapists specialize in..."],
+        "common_asks": ["book appointment", "prices", "what services", "gift cards", "parking"],
+    },
+    "medical": {
+        "style": "calm, professional, reassuring — HIPAA aware, never share patient info",
+        "skills": "scheduling appointments, insurance verification prompts, co-pay reminders, referrals, lab results routing (to nurse only), urgent triage",
+        "urgency": "medium-high — chest pain/breathing = call 911 immediately",
+        "phrases": ["I'll have someone call you back shortly", "The doctor will review that", "For your privacy..."],
+        "common_asks": ["schedule appointment", "refill prescription", "test results", "insurance", "urgent care"],
+    },
+    "dental": {
+        "style": "friendly, reassuring — patients are often anxious, make them feel at ease",
+        "skills": "scheduling cleanings/fillings/emergencies, insurance verification, payment plan info, post-procedure care instructions",
+        "urgency": "medium — dental emergencies (broken tooth, severe pain) = same-day slot",
+        "phrases": ["We'll take great care of you", "Dr. [name] has an opening...", "We accept most insurance plans"],
+        "common_asks": ["book cleaning", "emergency tooth pain", "insurance accepted", "cost of filling", "hours"],
+    },
+    "legal": {
+        "style": "formal, discreet, confidential — never discuss case details, always route to attorney",
+        "skills": "scheduling consultations, screening caller needs, message routing, document drop-off coordination",
+        "urgency": "varies — criminal/emergency = urgent callback",
+        "phrases": ["I'll have an attorney call you back", "We treat all matters with strict confidentiality", "May I ask the general nature of your inquiry?"],
+        "common_asks": ["free consultation", "how much does it cost", "immigration", "divorce", "criminal defense"],
+    },
+    "hvac": {
+        "style": "efficient, calm under pressure — many callers are stressed (no heat/AC)",
+        "skills": "emergency triage (no heat in winter = priority 1), scheduling tune-ups/repairs/installations, dispatching techs, ETAs, maintenance plan upsell",
+        "urgency": "HIGH — furnace out in winter, AC out in summer = emergency dispatch",
+        "phrases": ["We'll get someone out to you today", "Can you describe what the unit is doing?", "Is anyone in the home vulnerable to the heat/cold?"],
+        "common_asks": ["heater not working", "AC broken", "strange noise", "annual tune-up", "new system quote"],
+    },
+    "plumber": {
+        "style": "fast, calm, reassuring — burst pipe callers are panicking",
+        "skills": "emergency dispatch (burst pipes, flooding = NOW), scheduling drain/fixture/water heater jobs, triage water damage severity",
+        "urgency": "HIGH — active flooding/burst pipe = emergency dispatch, shut off water first",
+        "phrases": ["First — shut off your main water valve", "We have an emergency tech available", "Can you tell me where the water is coming from?"],
+        "common_asks": ["pipe burst", "drain clogged", "water heater", "toilet overflow", "leak under sink"],
+    },
+    "electrician": {
+        "style": "safety-first, clear, professional — electrical hazards need immediate triage",
+        "skills": "safety triage (sparks/burning smell = evacuate), scheduling panel upgrades/EV chargers/lighting, emergency outage response",
+        "urgency": "HIGH — sparks, burning smell, no power = safety emergency",
+        "phrases": ["If you see sparks or smell burning — leave the building and call 911", "I'm dispatching our on-call electrician", "Can you safely reach the breaker panel?"],
+        "common_asks": ["power outage", "breaker keeps tripping", "EV charger install", "panel upgrade", "outdoor lighting"],
+    },
+    "locksmith": {
+        "style": "fast, empathetic — lockouts are stressful, often at night or in bad weather",
+        "skills": "lockout dispatch (home/car/business), rekeying quotes, lock upgrade upsell, safe service",
+        "urgency": "HIGH — stranded lockouts = immediate dispatch, especially at night",
+        "phrases": ["We can have someone there in about 30 minutes", "Are you in a safe location?", "What type of lock/vehicle is it?"],
+        "common_asks": ["locked out of house", "car lockout", "lost keys", "rekey locks", "broken key"],
+    },
+    "hotel": {
+        "style": "elegant, welcoming, concierge-level service — every guest is a VIP",
+        "skills": "reservations, check-in/out info, amenity questions, local recommendations, complaint handling, room requests",
+        "urgency": "low-medium — complaints and room issues = prompt gracious response",
+        "phrases": ["It would be our pleasure", "Allow me to assist you with that", "Your comfort is our top priority"],
+        "common_asks": ["room availability", "check-in time", "parking", "restaurant recommendations", "pool hours"],
+    },
+    "salon": {
+        "style": "trendy, warm, excited about beauty — mirror the client's energy",
+        "skills": "booking cuts/color/blowouts, stylist availability, color consultation prompts, retail product recommendations, gift cards",
+        "urgency": "low — style emergencies (wedding tomorrow) = squeeze in if possible",
+        "phrases": ["You're going to love it!", "Let me check [stylist]'s availability", "Do you have a color reference photo?"],
+        "common_asks": ["book haircut", "color appointment", "balayage price", "extensions", "wedding packages"],
+    },
+    "gym": {
+        "style": "energetic, motivating, encouraging — match the fitness vibe",
+        "skills": "membership sign-ups, class booking, personal trainer scheduling, guest passes, cancellation policy",
+        "urgency": "low — motivate hesitant leads to come in for a free trial",
+        "phrases": ["Let's get you started!", "We have a free trial offer", "What are your fitness goals?"],
+        "common_asks": ["membership price", "class schedule", "personal trainer", "cancel membership", "guest pass"],
+    },
+    "auto": {
+        "style": "knowledgeable, trustworthy — car owners worry about being overcharged",
+        "skills": "service scheduling (oil change/brakes/tires), estimate requests, loaner car availability, pickup/drop-off service",
+        "urgency": "medium — brake/safety issues = priority",
+        "phrases": ["We can get you in tomorrow morning", "We'll do a complimentary inspection", "Our technicians are ASE certified"],
+        "common_asks": ["oil change appointment", "brake noise", "check engine light", "tire rotation", "estimate"],
+    },
+    "corporate": {
+        "style": "polished, efficient, professional — executive-level interactions",
+        "skills": "visitor check-in, meeting room booking, call routing to correct department, package handling, vendor management",
+        "urgency": "low — professionalism is the priority",
+        "phrases": ["I'll let them know you've arrived", "May I ask who's calling?", "I'll transfer you now"],
+        "common_asks": ["meeting room", "visitor badge", "transfer to department", "CEO/manager", "parking validation"],
+    },
+    "veterinary": {
+        "style": "warm, caring — pets are family, owners are emotionally invested",
+        "skills": "appointment booking, wellness/vaccine scheduling, urgent triage (vomiting/not eating/trauma = same day), prescription refills routing",
+        "urgency": "HIGH for emergencies — not breathing, trauma, seizure = emergency hospital referral",
+        "phrases": ["We'll take great care of [pet name]", "Can you describe the symptoms?", "Is [pet name] eating and drinking normally?"],
+        "common_asks": ["annual checkup", "vaccines", "my dog is sick", "prescription refill", "emergency"],
+    },
+    "appointment": {  # generic fallback
+        "style": "warm, professional, helpful",
+        "skills": "scheduling appointments, answering service questions, taking messages",
+        "urgency": "medium",
+        "phrases": ["Let me check availability", "I'd be happy to help", "Is there anything else I can assist with?"],
+        "common_asks": ["book appointment", "pricing", "hours", "location", "cancel/reschedule"],
+    },
+    "trade": {  # generic trade fallback
+        "style": "efficient, professional, calm under pressure",
+        "skills": "service scheduling, emergency triage, dispatching, customer intake",
+        "urgency": "HIGH — many calls are urgent",
+        "phrases": ["We can have someone out to you", "Can you describe the issue?", "Is this an emergency?"],
+        "common_asks": ["emergency service", "schedule repair", "pricing", "availability", "ETA"],
+    },
+}
+
+def detect_industry(biz_ctx: dict) -> str:
+    """Detect business industry from context."""
+    biz     = biz_ctx.get("business", {})
+    cfg     = biz_ctx.get("config", {})
+    industry= (biz.get("industry") or cfg.get("business_type") or "").lower()
+    name    = (biz.get("name") or "").lower()
+    vertical= (biz.get("vertical") or "appointment").lower()
+
+    mapping = [
+        (["spa", "massage", "facial", "wellness", "beauty", "nail"],         "spa"),
+        (["salon", "hair", "barber", "stylist", "blowout"],                   "salon"),
+        (["medical", "clinic", "doctor", "physician", "urgent care"],         "medical"),
+        (["dental", "dentist", "orthodont"],                                   "dental"),
+        (["veterinary", "vet ", "animal", "pet"],                             "veterinary"),
+        (["legal", "law firm", "attorney", "lawyer"],                         "legal"),
+        (["hvac", "heating", "cooling", "air condition", "furnace"],          "hvac"),
+        (["plumb", "pipe", "drain", "water heater"],                          "plumber"),
+        (["electric", "electrician", "wiring", "panel"],                      "electrician"),
+        (["locksmith", "lock ", "lockout", "key"],                            "locksmith"),
+        (["hotel", "motel", "resort", "inn", "lodge"],                        "hotel"),
+        (["gym", "fitness", "crossfit", "yoga", "pilates"],                   "gym"),
+        (["auto", "car", "vehicle", "mechanic", "repair shop", "dealership"], "auto"),
+        (["corporate", "office", "agency", "consulting", "marketing"],        "corporate"),
+    ]
+    for keywords, industry_key in mapping:
+        if any(k in industry or k in name for k in keywords):
+            return industry_key
+
+    return vertical if vertical in INDUSTRY_SCRIPTS else "appointment"
+
+
 def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     now  = datetime.now()
     time_str = now.strftime("%-I:%M %p")
@@ -447,9 +593,22 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     mem_text = "\n".join(memories) if memories else "Nothing saved yet."
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
-    return f"""You are Aria, a warm, upbeat, and exceptionally capable AI receptionist for {business_name}, built by Receptionist.co.
+    industry_key    = detect_industry(biz_ctx)
+    industry_script = INDUSTRY_SCRIPTS.get(industry_key, INDUSTRY_SCRIPTS["appointment"])
+    industry_style  = industry_script["style"]
+    industry_skills = industry_script["skills"]
+    industry_urgency= industry_script["urgency"]
+    industry_phrases= ", ".join(f'"{p}"' for p in industry_script["phrases"][:3])
+    industry_asks   = ", ".join(industry_script["common_asks"][:5])
 
-Speak with a genuine smile at all times. Confident, concise, professional — like a 5-star hotel concierge who genuinely loves their job.
+    return f"""You are Aria, the AI receptionist for {business_name}, built by Receptionist.co.
+
+━━━ INDUSTRY: {industry_key.upper()} ━━━━━━━━━━━━━━━━━━━━━━
+COMMUNICATION STYLE: {industry_style}
+CORE SKILLS: {industry_skills}
+URGENCY LEVEL: {industry_urgency}
+NATURAL PHRASES TO USE: {industry_phrases}
+MOST COMMON REQUESTS: {industry_asks}
 
 ━━━ IDENTITY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NAME: Aria | BUSINESS: {business_name} ({business_type})
@@ -644,7 +803,17 @@ async def entrypoint(ctx: JobContext):
     async def execute_confirmed_action(ctx: RunContext, confirmation_id: str) -> str:
         """Execute a queued action after the owner confirms with yes.
         Only call this when owner explicitly says yes/confirm/go ahead."""
-        return await _execute_confirmed(business_id, confirmation_id)
+        result = await _execute_confirmed(business_id, confirmation_id)
+        # Emit structured event to dashboard via room data so it can show a card
+        try:
+            pending = pending_confirmations.get(confirmation_id) or {}
+            action  = pending.get("action", "")
+            data    = pending.get("data", {})
+            event   = json.dumps({"type": "aria_action", "action": action, "data": data, "result": result})
+            await ctx.room.local_participant.publish_data(event.encode(), reliable=True, topic="aria_events")
+        except Exception:
+            pass
+        return result
 
     @function_tool
     async def cancel_pending_action(ctx: RunContext, confirmation_id: str) -> str:
@@ -889,7 +1058,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=openai.STT(model="whisper-1", language="en"),
         llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),  # mini = ~2x faster response
-        tts=openai.TTS(model="tts-1-hd", voice="shimmer"),  # tts-1-hd = highest quality, closest to realtime voice
+        tts=openai.TTS(model="tts-1", voice="shimmer"),  # tts-1 faster than hd, still warm
         vad=silero.VAD.load(min_silence_duration=0.8),  # 0.8s — fast response
     )
 
