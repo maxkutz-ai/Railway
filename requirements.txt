@@ -1,8 +1,7 @@
-# Pin exact versions to prevent silent breaking changes
 livekit-agents==0.12.4
 livekit-plugins-openai==0.10.4
 livekit-plugins-silero==0.7.3
-livekit-plugins-simli==0.2.0
+livekit-plugins-simli==1.4.6
 livekit-plugins-deepgram==0.7.0
 supabase>=2.3.0
 httpx>=0.27.0

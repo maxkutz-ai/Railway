@@ -1235,12 +1235,23 @@ async def entrypoint(ctx: JobContext):
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
-    avatar = simli.AvatarSession(
-        simli_config=simli.SimliConfig(
-            api_key=os.getenv("SIMLI_API_KEY", ""),
+    SIMLI_API_KEY = os.getenv("SIMLI_API_KEY", "")
+
+    # Simli 1.x API — SimliConfig signature changed
+    try:
+        # Try 1.x API first
+        avatar = simli.AvatarSession(
+            simli_config=simli.SimliConfig(
+                api_key=SIMLI_API_KEY,
+                face_id=SIMLI_FACE_ID,
+            )
+        )
+    except TypeError:
+        # Fallback for older API signature
+        avatar = simli.AvatarSession(
+            api_key=SIMLI_API_KEY,
             face_id=SIMLI_FACE_ID,
         )
-    )
 
     # Start session FIRST — then attach avatar
     # In livekit-agents >= 0.12, session must be running before avatar.start()
