@@ -48,6 +48,11 @@ from supabase import create_client, Client
 
 from livekit.agents import Agent, AgentSession, JobContext, RunContext, WorkerOptions, cli, function_tool, room_io
 from livekit.plugins import openai, silero, simli
+try:
+    from livekit.plugins import deepgram as deepgram_plugin
+    DEEPGRAM_AVAILABLE = True
+except ImportError:
+    DEEPGRAM_AVAILABLE = False
 
 logger = logging.getLogger("aria-agent")
 
@@ -668,15 +673,34 @@ Actions needing confirmation:
 🔔 ESCALATION: "Let me get someone for you"
 😄 PERSONALITY: warm small talk, jokes, fun facts
 
-━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ BREVITY RULES (CRITICAL) ━━━━━━━━━━━━
+This is VOICE. People are busy. Every response must be SHORT.
+
+• MAX 2 sentences per response. Usually 1 is enough.
+• Answer the question first. Extra context only if essential.
+• Never add "Is there anything else I can help with?" — it wastes time.
+• Never say "Certainly!", "Absolutely!", "Great question!", "Of course!" — filler.
+• Never repeat what the user just said back to them.
+• If asked for weather → give temp + condition in one sentence. Done.
+• If asked for messages → say how many and who. Done.
+• If asked about appointments → say next one, time, who. Done.
+• If you can't do something → say what you CAN do instead. One sentence.
+• Small talk → one warm sentence max, then ask how you can help.
+
+GOOD: "It's 72°F and sunny in Denver."
+BAD:  "Great question! Let me check the weather for you. It looks like it's currently 72 degrees Fahrenheit and sunny in Denver, Colorado. Is there anything else I can help you with today?"
+
+GOOD: "You have 3 missed calls — 2 from unknown numbers, 1 from Jane Smith."
+BAD:  "I checked and it looks like you have some missed calls. There are 3 in total..."
+
+━━━ OTHER RULES ━━━━━━━━━━━━━━━━━━━━━━━━━
 • Save memory IMMEDIATELY for names, preferences, facts
 • Never ask for something already in memory
 • Never say "I can't" if you have a tool for it
-• Concise voice-first responses — no markdown, no lists
-• Search documents before admitting you don't know something
-• When uncertain, search the web
+• No markdown, no bullet points — natural speech only
+• Search documents or web before admitting ignorance
 
-GREETING: "Hi{' ' + owner_name + '!' if owner_name else '!'} I'm Aria, your AI receptionist. How can I help you today?"
+GREETING: "Hi{' ' + owner_name + '!' if owner_name else '!'} I'm Aria. How can I help?"
 """
 
 
@@ -1110,14 +1134,31 @@ async def entrypoint(ctx: JobContext):
         return json.dumps({"note": "Payment link not set up yet — the owner can configure it in Settings."})
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
+    # STT — Deepgram is ~4x faster than Whisper (streaming vs batch)
+    # Falls back to Whisper if Deepgram not installed or no API key
+    deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+    if DEEPGRAM_AVAILABLE and deepgram_key:
+        stt_engine = deepgram_plugin.STT(
+            model="nova-2",
+            language="en-US",
+            smart_format=True,
+            punctuate=True,
+            filler_words=False,
+            interim_results=True,   # stream partial results for lower latency
+        )
+        logger.info("STT: Deepgram nova-2 (fast streaming)")
+    else:
+        stt_engine = openai.STT(model="whisper-1", language="en")
+        logger.info("STT: OpenAI Whisper (fallback — install livekit-plugins-deepgram for faster responses)")
+
     session = AgentSession(
-        stt=openai.STT(model="whisper-1", language="en"),
+        stt=stt_engine,
         llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
         tts=openai.TTS(model="tts-1", voice="shimmer"),
         vad=silero.VAD.load(
-            min_silence_duration=1.2,   # wait 1.2s of silence before responding
-            min_speech_duration=0.2,    # ignore blips under 0.2s (breathing, clicks)
-            activation_threshold=0.5,   # standard sensitivity
+            min_silence_duration=0.8,   # 0.8s — faster response
+            min_speech_duration=0.1,    # ignore very short blips
+            activation_threshold=0.5,
         ),
     )
 
@@ -1182,7 +1223,7 @@ async def entrypoint(ctx: JobContext):
                 if idle_secs > 45:
                     mark_active()
                     await session.generate_reply(
-                        instructions="The user has been quiet. Gently ask if there is anything you can help with today. Keep it to one short sentence."
+                        instructions="One short sentence: ask if they need anything. Maximum 8 words."
                     )
             except Exception as e:
                 logger.debug(f"keepalive tick: {e}")
@@ -1190,7 +1231,7 @@ async def entrypoint(ctx: JobContext):
     asyncio.create_task(keepalive_task())
 
     await session.generate_reply(
-        instructions="Greet the owner warmly by name if you know it. Mention you're their AI receptionist and you can check availability and book appointments. Be brief, warm, and enthusiastic."
+        instructions="Give a warm 1-sentence greeting. Use their name if you know it. Do not list features or capabilities."
     )
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
