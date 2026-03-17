@@ -1,7 +1,13 @@
-livekit-agents[openai,simli,silero]~=1.4
-livekit-plugins-openai~=1.4
-livekit-plugins-simli~=1.4
-livekit-plugins-silero~=1.4
+livekit-agents[openai,silero,simli]>=0.12.0
+livekit-plugins-openai>=0.10.0
+livekit-plugins-silero>=0.7.0
+livekit-plugins-simli>=0.2.0
+supabase>=2.3.0
 httpx>=0.27.0
-supabase>=2.0.0
 python-dotenv>=1.0.0
+# Google Drive integration (optional)
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-httplib2>=0.2.0
+# Dropbox integration (optional)
+dropbox>=11.36.0
