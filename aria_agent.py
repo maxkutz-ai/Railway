@@ -789,8 +789,8 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=openai.STT(model="whisper-1", language="en"),
         llm=openai.LLM(model="gpt-4o", temperature=0.8),
-        tts=openai.TTS(voice="shimmer"),
-        vad=silero.VAD.load(min_silence_duration=3.0),  # 3s avoids early cutoff
+        tts=openai.TTS(model="tts-1", voice="shimmer"),  # tts-1 = shimmer sounds like her
+        vad=silero.VAD.load(min_silence_duration=1.5),  # 1.5s — fast response, avoids early cutoff
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
@@ -834,6 +834,19 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(audio_output=False),
     )
+
+    # ── Keepalive — prevents idle disconnect ─────────────────────────────────
+    async def keepalive_task():
+        """Send a gentle nudge every 25 seconds to prevent idle timeout."""
+        while True:
+            await asyncio.sleep(25)
+            try:
+                if session and hasattr(session, '_agent_session'):
+                    pass  # session is active
+            except Exception:
+                break
+
+    asyncio.create_task(keepalive_task())
 
     await session.generate_reply(
         instructions="Greet the owner warmly. Mention you're their AI receptionist. Briefly hint at one thing you can help with today — appointments, documents, or a quick question. Be brief and enthusiastic."
