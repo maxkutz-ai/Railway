@@ -92,7 +92,7 @@ async def load_business_context(business_id: str) -> dict:
         if biz_set.data:
             results["business_settings"] = biz_set.data
 
-        svcs = sb.from_("services").select("name,duration_minutes,price,category,description").eq("business_id", business_id).eq("is_active", True).execute()
+        svcs = sb.from_("services").select("name,duration_minutes,price,category").eq("business_id", business_id).eq("is_active", True).execute()
         if svcs.data:
             results["services"] = svcs.data
 
@@ -1328,9 +1328,15 @@ async def entrypoint(ctx: JobContext):
 
     asyncio.create_task(keepalive_task())
 
-    await session.generate_reply(
-        instructions=f"Give a warm 1-sentence greeting as {ai_name}. Use owner name if known. One sentence only."
-    )
+    # ai_name from config (safe fallback)
+    _ai_name = (biz_ctx.get("config") or {}).get("ai_name") or "Aria"
+    _owner   = (biz_ctx.get("config") or {}).get("owner_name") or ""
+    _greeting_hint = f"Give a warm 1-sentence greeting as {_ai_name}."
+    if _owner:
+        _greeting_hint += f" Address {_owner} by name."
+    _greeting_hint += " One sentence only."
+
+    await session.generate_reply(instructions=_greeting_hint)
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
 
