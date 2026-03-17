@@ -660,6 +660,11 @@ Actions needing confirmation:
   • Adding to waitlist
   • Logging messages
 
+━━━ DASHBOARD FEATURES (you can tell the owner about these) ━━━
+🎵 MUSIC: The dashboard has a background music player with jazz, classical, and ambient tracks. Tell the owner to use the music controls in the video window to play/stop music. You cannot play it yourself but it's built into their dashboard.
+📊 USAGE: The dashboard shows their video minute usage and subscription status.
+🔔 ALERTS: Smart alerts appear in the dashboard for missed calls and important events.
+
 ━━━ WHAT A GREAT RECEPTIONIST DOES ━━━━━
 📅 SCHEDULE: book, reschedule, cancel appointments
 👤 CRM: create contacts, look up client history
@@ -687,8 +692,11 @@ This is VOICE. People are busy. Every response must be SHORT.
 • If you can't do something → say what you CAN do instead. One sentence.
 • Small talk → one warm sentence max, then ask how you can help.
 
-GOOD: "It's 72°F and sunny in Denver."
-BAD:  "Great question! Let me check the weather for you. It looks like it's currently 72 degrees Fahrenheit and sunny in Denver, Colorado. Is there anything else I can help you with today?"
+GOOD: "It's 72 and sunny in Denver." (done — nothing else)
+GOOD: "You have 2 appointments today — Jane at 2pm, Tom at 4pm." (done)
+BAD:  "Great question! Let me check the weather for you..." (never say this)
+BAD:  "I can't do X, but I can help you with Y instead!" (just do Y)
+BAD:  "Is there anything else I can help with?" (never add this)
 
 GOOD: "You have 3 missed calls — 2 from unknown numbers, 1 from Jane Smith."
 BAD:  "I checked and it looks like you have some missed calls. There are 3 in total..."
@@ -985,7 +993,7 @@ async def entrypoint(ctx: JobContext):
 
     @function_tool
     async def get_weather(ctx: RunContext, location: str = "") -> str:
-        """Get current weather. Uses saved location automatically."""
+        """Get current weather for any location. ALWAYS call this tool immediately when asked about weather — never say you don't know without calling this first."""
         loc = location or biz_ctx.get("business_settings", {}).get("location_city") or "Denver"
         try:
             async with httpx.AsyncClient() as client:
@@ -1156,9 +1164,9 @@ async def entrypoint(ctx: JobContext):
         llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
         tts=openai.TTS(model="tts-1", voice="shimmer"),
         vad=silero.VAD.load(
-            min_silence_duration=0.8,   # 0.8s — faster response
-            min_speech_duration=0.1,    # ignore very short blips
-            activation_threshold=0.5,
+            min_silence_duration=0.6,   # 0.6s — faster
+            min_speech_duration=0.05,   # catch even soft/short speech
+            activation_threshold=0.35,  # lower = more sensitive mic pickup
         ),
     )
 
