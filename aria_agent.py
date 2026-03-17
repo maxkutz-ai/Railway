@@ -615,7 +615,59 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     industry_phrases= ", ".join(f'"{p}"' for p in industry_script["phrases"][:3])
     industry_asks   = ", ".join(industry_script["common_asks"][:5])
 
-    return f"""You are Aria, the AI receptionist for {business_name}, built by Receptionist.co.
+    # Custom instructions override — if the business has a custom prompt, inject it
+    custom_instructions = cfg.get("custom_instructions") or ""
+    ai_name             = cfg.get("ai_name") or "Aria"
+    role_description    = cfg.get("role_description") or ""
+    primary_goal        = cfg.get("primary_goal") or ""
+    anti_hallucination  = cfg.get("anti_hallucination_rule") or "If uncertain, say: I don't want to guess - I'll have our team follow up on that." 
+    turn_taking_strict  = cfg.get("turn_taking_strict", True)
+    rush_mode_enabled   = cfg.get("rush_mode_enabled", True)
+
+    # Load all structured instruction fields
+    role_description   = cfg.get("role_description") or ""
+    primary_goal_text  = cfg.get("primary_goal") or primary_goal or ""
+    anti_hallu         = cfg.get("anti_hallucination_rule") or anti_hallucination
+    turn_taking        = cfg.get("turn_taking_rules") or ""
+    rush_mode          = cfg.get("rush_mode_rules") or ""
+    no_loop            = cfg.get("no_loop_rule") or ""
+    escalation         = cfg.get("escalation_rules") or ""
+    greeting_script    = cfg.get("greeting") or ""
+    flow_script        = cfg.get("flow_script") or ""
+
+    # Build structured custom block — only include non-empty sections
+    def section(title: str, body: str) -> str:
+        return f"\n━━━ {title} ━━━━━━━━━━━━━━━━━━━━\n{body.strip()}\n" if body.strip() else ""
+
+    custom_block = ""
+    if any([role_description, primary_goal_text, anti_hallu, turn_taking, rush_mode,
+            no_loop, escalation, custom_instructions.strip(), flow_script]):
+        custom_block = "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        custom_block += "\n⚡ BUSINESS-SPECIFIC INSTRUCTIONS — FOLLOW EXACTLY"
+        custom_block += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        if role_description:
+            custom_block += section("ROLE & IDENTITY", role_description)
+        if primary_goal_text:
+            custom_block += section("PRIMARY GOAL", primary_goal_text)
+        if anti_hallu:
+            custom_block += section("ANTI-HALLUCINATION RULE", anti_hallu)
+        if turn_taking:
+            custom_block += section("TURN-TAKING / WAIT RULE (CRITICAL)", turn_taking)
+        if rush_mode:
+            custom_block += section("RUSH MODE (CRITICAL)", rush_mode)
+        if no_loop:
+            custom_block += section("NO-LOOP RULE", no_loop)
+        if escalation:
+            custom_block += section("ESCALATION RULES", escalation)
+        if custom_instructions.strip():
+            custom_block += section("ADDITIONAL RULES & KNOWLEDGE", custom_instructions)
+        if flow_script.strip():
+            custom_block += section("MANDATORY CONVERSATION FLOW", flow_script)
+        if greeting_script.strip():
+            custom_block += f"\n━━━ GREETING (SAY EXACTLY) ━━━━━━━━━━━━━━━━━━━━\n\"{greeting_script.strip()}\"\n"
+        custom_block += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    return f"""You are {ai_name}, the AI receptionist for {business_name}, built by Receptionist.co.
 
 ━━━ INDUSTRY: {industry_key.upper()} ━━━━━━━━━━━━━━━━━━━━━━
 COMMUNICATION STYLE: {industry_style}
@@ -630,8 +682,11 @@ OWNER: {owner_name or "unknown — ask once and save immediately"}
 PERSONALITY: {personality}
 PHONE: {phone} | TIMEZONE: {timezone}
 TIME: {time_str} on {date_str} | LOCATION: {loc_text}
+{custom_block}
+━━━ ANTI-HALLUCINATION ━━━━━━━━━━━━━━━━━━
+{anti_hallucination}
 
-━━━ SERVICES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{f"━━━ PRIMARY GOAL ━━━━━━━━━━━━━━━━━━━━━━━━{chr(10)}{primary_goal}{chr(10)}" if primary_goal else ""}━━━ SERVICES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {svc_lines}
 
 {f"━━━ STAFF ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{chr(10)}{staff_lines}{chr(10)}" if staff_lines else ""}
@@ -678,6 +733,13 @@ Actions needing confirmation:
 🔔 ESCALATION: "Let me get someone for you"
 😄 PERSONALITY: warm small talk, jokes, fun facts
 
+━━━ TURN-TAKING RULES ━━━━━━━━━━━━━━━━━━━
+{"• Ask ONE question at a time. STOP and WAIT for the answer before continuing." if turn_taking_strict else ""}
+{"• Never talk over the caller. If they start speaking, stop immediately." if turn_taking_strict else ""}
+{"• Do not say 'Perfect/Great/Thanks' until you have actually heard their answer." if turn_taking_strict else ""}
+{"• After a YES/NO answer, pause one beat before continuing." if turn_taking_strict else ""}
+{"• RUSH MODE: If caller says they must go, ask only the minimum needed and close quickly." if rush_mode_enabled else ""}
+
 ━━━ BREVITY RULES (CRITICAL) ━━━━━━━━━━━━
 This is VOICE. People are busy. Every response must be SHORT.
 
@@ -708,7 +770,7 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • No markdown, no bullet points — natural speech only
 • Search documents or web before admitting ignorance
 
-GREETING: "Hi{' ' + owner_name + '!' if owner_name else '!'} I'm Aria. How can I help?"
+GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
 """
 
 
@@ -1239,7 +1301,7 @@ async def entrypoint(ctx: JobContext):
     asyncio.create_task(keepalive_task())
 
     await session.generate_reply(
-        instructions="Give a warm 1-sentence greeting. Use their name if you know it. Do not list features or capabilities."
+        instructions=f"Give a warm 1-sentence greeting as {ai_name}. Use owner name if known. One sentence only."
     )
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
