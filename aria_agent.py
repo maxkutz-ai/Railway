@@ -1058,24 +1058,47 @@ async def entrypoint(ctx: JobContext):
     @function_tool
     async def get_weather(ctx: RunContext, location: str = "") -> str:
         """Get current weather for any location. ALWAYS call this tool immediately when asked about weather — never say you don't know without calling this first."""
-        loc = location or biz_ctx.get("business_settings", {}).get("location_city") or "Denver"
+        loc = location or biz_ctx.get("business_settings", {}).get("location_city") or "Denver, Colorado"
+        # Clean up location for URL
+        loc_url = loc.strip().replace(" ", "+")
         try:
-            async with httpx.AsyncClient() as client:
-                r = await client.get(f"https://wttr.in/{loc}?format=j1", timeout=5)
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                # Try JSON format first
+                r = await client.get(f"https://wttr.in/{loc_url}?format=j1", timeout=8)
                 if r.status_code == 200:
                     d = r.json()
                     c = d["current_condition"][0]
+                    temp_f    = c.get("temp_F", "?")
+                    feels     = c.get("FeelsLikeF", "")
+                    desc      = (c.get("weatherDesc") or [{}])[0].get("value", "")
+                    humidity  = c.get("humidity", "")
+                    wind      = c.get("windspeedMiles", "")
+                    summary   = f"{temp_f}°F"
+                    if desc:
+                        summary += f", {desc}"
+                    if feels and feels != temp_f:
+                        summary += f" (feels like {feels}°F)"
+                    if wind:
+                        summary += f", wind {wind} mph"
                     return json.dumps({
                         "location":    loc,
-                        "temp_f":      c.get("temp_F"),
-                        "feels_like":  c.get("FeelsLikeF") + "°F",
-                        "description": c["weatherDesc"][0]["value"],
-                        "humidity":    c.get("humidity") + "%",
-                        "wind_mph":    c.get("windspeedMiles") + " mph",
+                        "summary":     summary,
+                        "temp_f":      temp_f,
+                        "description": desc,
+                        "humidity":    humidity + "%" if humidity else "",
+                        "wind_mph":    wind,
                     })
+
+                # Fallback: simple one-line format
+                r2 = await client.get(f"https://wttr.in/{loc_url}?format=3", timeout=5)
+                if r2.status_code == 200:
+                    text = r2.text.strip()
+                    return json.dumps({"location": loc, "summary": text})
+
         except Exception as e:
-            return json.dumps({"error": str(e)})
-        return json.dumps({"error": "Weather unavailable"})
+            logger.warning(f"Weather tool error for '{loc}': {e}")
+
+        return json.dumps({"location": loc, "error": f"Could not retrieve weather for {loc}. Tell the user the weather is temporarily unavailable and suggest weather.com."})
 
     @function_tool
     async def web_search(ctx: RunContext, query: str) -> str:
