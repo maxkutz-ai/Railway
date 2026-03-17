@@ -789,7 +789,7 @@ async def entrypoint(ctx: JobContext):
     session = AgentSession(
         stt=openai.STT(model="whisper-1", language="en"),
         llm=openai.LLM(model="gpt-4o", temperature=0.8),
-        tts=openai.TTS(model="tts-1", voice="shimmer"),  # tts-1 = shimmer sounds like her
+        tts=openai.TTS(model="tts-1-hd", voice="shimmer"),  # tts-1-hd = highest quality, closest to realtime voice
         vad=silero.VAD.load(min_silence_duration=1.5),  # 1.5s — fast response, avoids early cutoff
     )
 
