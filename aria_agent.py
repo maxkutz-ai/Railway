@@ -357,7 +357,12 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
             for k, v in h.items():
                 day = day_map.get(k.lower(), k)
                 if isinstance(v, dict):
-                    lines.append(f"  {day}: {'Closed' if v.get('closed') else f\"{v.get('open','?')} – {v.get('close','?')}\"}")
+                    if v.get("closed"):
+                        lines.append(f"  {day}: Closed")
+                    else:
+                        open_t  = v.get("open", "?")
+                        close_t = v.get("close", "?")
+                        lines.append(f"  {day}: {open_t} – {close_t}")
                 else:
                     lines.append(f"  {day}: {v}")
             hours_text = "\n".join(lines)
