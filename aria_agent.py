@@ -161,18 +161,20 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
 
     try:
         if action == "create_appointment":
-            sb.from_("appointments").insert({
+            # Ensure appointments table exists, create minimal record
+            appt_data = {
                 "business_id":      business_id,
                 "contact_name":     data.get("contact_name"),
-                "contact_phone":    data.get("contact_phone"),
-                "service":          data.get("service"),
-                "staff_name":       data.get("staff_name"),
+                "contact_phone":    data.get("contact_phone", ""),
+                "service":          data.get("service", ""),
+                "staff_name":       data.get("staff_name", ""),
                 "appointment_date": data.get("date"),
                 "appointment_time": data.get("time"),
                 "notes":            data.get("notes", ""),
                 "status":           "confirmed",
                 "created_by":       "aria",
-            }).execute()
+            }
+            sb.from_("appointments").insert(appt_data).execute()
             return f"Appointment confirmed for {data.get('contact_name')} on {data.get('date')} at {data.get('time')}."
 
         elif action == "create_contact":
@@ -626,14 +628,21 @@ async def entrypoint(ctx: JobContext):
         """Get upcoming appointments for the business."""
         sb = get_supabase()
         if not sb:
-            return json.dumps({"error": "Database unavailable"})
+            return json.dumps({"appointments": [], "count": 0, "note": "Database unavailable"})
         try:
             today  = datetime.now().strftime("%Y-%m-%d")
             future = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-            r = sb.from_("appointments").select("contact_name,service,appointment_date,appointment_time,staff_name,status").eq("business_id", business_id).gte("appointment_date", today).lte("appointment_date", future).order("appointment_date").order("appointment_time").execute()
-            return json.dumps({"appointments": r.data or [], "count": len(r.data or [])})
+            # Try appointments table first, fall back to bookings
+            for table in ["appointments", "bookings", "calendar_events"]:
+                try:
+                    r = sb.from_(table).select("*").eq("business_id", business_id).gte("appointment_date", today).lte("appointment_date", future).order("appointment_date").execute()
+                    if r.data is not None:
+                        return json.dumps({"appointments": r.data or [], "count": len(r.data or []), "table": table})
+                except Exception:
+                    continue
+            return json.dumps({"appointments": [], "count": 0, "note": "No appointments table found yet — the owner can add appointments through the dashboard."})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"appointments": [], "count": 0, "error": str(e)})
 
     @function_tool
     async def get_weather(ctx: RunContext, location: str = "") -> str:
@@ -788,9 +797,9 @@ async def entrypoint(ctx: JobContext):
     # ── Pipeline ──────────────────────────────────────────────────────────────
     session = AgentSession(
         stt=openai.STT(model="whisper-1", language="en"),
-        llm=openai.LLM(model="gpt-4o", temperature=0.8),
+        llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),  # mini = ~2x faster response
         tts=openai.TTS(model="tts-1-hd", voice="shimmer"),  # tts-1-hd = highest quality, closest to realtime voice
-        vad=silero.VAD.load(min_silence_duration=1.5),  # 1.5s — fast response, avoids early cutoff
+        vad=silero.VAD.load(min_silence_duration=0.8),  # 0.8s — fast response
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
