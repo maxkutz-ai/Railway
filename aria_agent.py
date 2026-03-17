@@ -59,6 +59,9 @@ def get_supabase() -> Optional[Client]:
         return create_client(url, key)
     return None
 
+def get_app_url() -> str:
+    return os.getenv("NEXT_PUBLIC_APP_URL", "https://app.receptionist.co")
+
 
 # ── Load business context ─────────────────────────────────────────────────────
 async def load_business_context(business_id: str) -> dict:
@@ -161,60 +164,66 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
 
     try:
         if action == "create_appointment":
-            # Look up or create contact first
-            contact_id = None
-            contact_name = data.get("contact_name", "")
-            contact_phone = data.get("contact_phone", "")
-            try:
-                if contact_name:
-                    # Try to find existing contact
-                    names = contact_name.split(" ", 1)
-                    first = names[0]
-                    last  = names[1] if len(names) > 1 else ""
-                    cr = sb.from_("contacts").select("id").eq("business_id", business_id).ilike("first_name", f"%{first}%").limit(1).execute()
-                    if cr.data:
-                        contact_id = cr.data[0]["id"]
-                    else:
-                        # Create new contact
-                        nr = sb.from_("contacts").insert({
-                            "business_id": business_id,
-                            "first_name":  first,
-                            "last_name":   last,
-                            "phone":       contact_phone,
-                            "source":      "aria",
-                        }).execute()
-                        if nr.data:
-                            contact_id = nr.data[0]["id"]
-            except Exception:
-                pass
-
             # Parse date+time into ISO timestamp
-            date_str = data.get("date", "")
-            time_str = data.get("time", "12:00 PM")
+            contact_name  = data.get("contact_name", "")
+            contact_phone = data.get("contact_phone", "")
+            contact_email = data.get("contact_email", "")
+            date_str      = data.get("date", "")
+            time_str      = data.get("time", "12:00 PM")
+            service_name  = data.get("service", "")
+
+            # Parse time string
             try:
                 from datetime import datetime as dt
-                start_dt = dt.strptime(f"{date_str} {time_str}", "%Y-%m-%d %I:%M %p")
-                end_dt   = start_dt + timedelta(hours=1)
-                start_iso = start_dt.isoformat()
-                end_iso   = end_dt.isoformat()
+                for fmt in ["%Y-%m-%d %I:%M %p", "%Y-%m-%d %H:%M", "%Y-%m-%d %I %p"]:
+                    try:
+                        start_dt  = dt.strptime(f"{date_str} {time_str}", fmt)
+                        start_iso = start_dt.isoformat()
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    start_iso = f"{date_str}T12:00:00"
             except Exception:
                 start_iso = f"{date_str}T12:00:00"
-                end_iso   = f"{date_str}T13:00:00"
 
-            appt_data = {
-                "business_id":    business_id,
-                "contact_id":     contact_id,
-                "start_time":     start_iso,
-                "end_time":       end_iso,
-                "service_type":   data.get("service", ""),
-                "technician_name":data.get("staff_name", ""),
-                "notes":          data.get("notes", ""),
-                "status":         "booked",
-                "job_status":     "confirmed",
-                "booking_source": "aria",
-            }
-            sb.from_("appointments").insert(appt_data).execute()
-            return f"Appointment confirmed for {contact_name} on {data.get('date')} at {data.get('time')}."
+            # Call our booking API — handles Cal.com + Supabase in one shot
+            try:
+                async with httpx.AsyncClient() as client:
+                    r = await client.post(
+                        f"{get_app_url()}/api/cal/book",
+                        json={
+                            "business_id":   business_id,
+                            "contact_name":  contact_name,
+                            "contact_phone": contact_phone,
+                            "contact_email": contact_email,
+                            "service_name":  service_name,
+                            "start_time":    start_iso,
+                            "notes":         data.get("notes", ""),
+                        },
+                        timeout=10,
+                    )
+                    if r.status_code == 200:
+                        resp = r.json()
+                        cal_note = " (synced to calendar)" if resp.get("cal_booked") else ""
+                        return f"Appointment confirmed for {contact_name} on {date_str} at {time_str}{cal_note}."
+            except Exception as e:
+                logger.warning(f"Booking API call failed: {e}")
+
+            # Fallback — direct Supabase insert
+            sb_local = get_supabase()
+            if sb_local:
+                sb_local.from_("appointments").insert({
+                    "business_id":    business_id,
+                    "start_time":     start_iso,
+                    "service_type":   service_name,
+                    "technician_name":data.get("staff_name", ""),
+                    "notes":          data.get("notes", ""),
+                    "status":         "booked",
+                    "job_status":     "confirmed",
+                    "booking_source": "aria",
+                }).execute()
+            return f"Appointment confirmed for {contact_name} on {date_str} at {time_str}."
 
         elif action == "create_contact":
             names = (data.get("name") or "").split(" ", 1)
@@ -705,6 +714,49 @@ async def entrypoint(ctx: JobContext):
         return f"Saved: {key} = {value}"
 
     @function_tool
+    async def check_availability(
+        ctx: RunContext,
+        date: str,
+        service: str = "",
+    ) -> str:
+        """Check available appointment slots for a given date.
+        date: YYYY-MM-DD format (e.g. "2025-03-18")
+        service: optional service name to filter by
+        Always call this BEFORE offering specific times to the owner."""
+        try:
+            # Find service_id if service name given
+            service_id = None
+            if service and business_id:
+                sb = get_supabase()
+                if sb:
+                    r = sb.from_("services").select("id").eq("business_id", business_id).ilike("name", f"%{service}%").limit(1).execute()
+                    if r.data:
+                        service_id = r.data[0]["id"]
+
+            params = f"business_id={business_id}&date={date}"
+            if service_id:
+                params += f"&service_id={service_id}"
+
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    f"{get_app_url()}/api/cal/slots?{params}",
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    slots = data.get("slots", [])
+                    source = data.get("source", "cal")
+                    if not slots:
+                        return json.dumps({"available": False, "message": f"No available slots on {date}"})
+                    # Return first 6 slots as readable times
+                    labels = [s["label"] for s in slots[:6]]
+                    return json.dumps({"available": True, "date": date, "slots": labels, "source": source, "count": len(slots)})
+        except Exception as e:
+            pass
+        # Fallback — generic business hours
+        return json.dumps({"available": True, "date": date, "slots": ["9:00 AM", "10:00 AM", "11:00 AM", "1:00 PM", "2:00 PM", "3:00 PM"], "source": "generic"})
+
+    @function_tool
     async def request_appointment(
         ctx: RunContext,
         contact_name: str,
@@ -712,17 +764,20 @@ async def entrypoint(ctx: JobContext):
         time: str,
         service: str = "",
         contact_phone: str = "",
+        contact_email: str = "",
         staff_name: str = "",
         notes: str = "",
     ) -> str:
         """Queue an appointment for owner confirmation.
-        date: YYYY-MM-DD | time: HH:MM AM/PM
+        date: YYYY-MM-DD | time: HH:MM AM/PM (e.g. "2:00 PM")
+        Call check_availability first to confirm the slot is open.
         Returns a confirmation_id — wait for owner yes/no before executing."""
         description = f"Book {service or 'appointment'} for {contact_name} on {date} at {time}"
         if staff_name:
             description += f" with {staff_name}"
         conf_id = add_pending("create_appointment", {
             "contact_name": contact_name, "contact_phone": contact_phone,
+            "contact_email": contact_email,
             "service": service, "staff_name": staff_name,
             "date": date, "time": time, "notes": notes,
         }, description)
@@ -1057,9 +1112,13 @@ async def entrypoint(ctx: JobContext):
     # ── Pipeline ──────────────────────────────────────────────────────────────
     session = AgentSession(
         stt=openai.STT(model="whisper-1", language="en"),
-        llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),  # mini = ~2x faster response
-        tts=openai.TTS(model="tts-1", voice="shimmer"),  # tts-1 faster than hd, still warm
-        vad=silero.VAD.load(min_silence_duration=0.8),  # 0.8s — fast response
+        llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
+        tts=openai.TTS(model="tts-1", voice="shimmer"),
+        vad=silero.VAD.load(
+            min_silence_duration=1.2,   # wait 1.2s of silence before responding
+            min_speech_duration=0.2,    # ignore blips under 0.2s (breathing, clicks)
+            activation_threshold=0.5,   # standard sensitivity
+        ),
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
@@ -1078,6 +1137,7 @@ async def entrypoint(ctx: JobContext):
             tools=[
                 save_memory,
                 # Appointment & CRM (with confirmation)
+                check_availability,
                 request_appointment,
                 request_contact,
                 request_log_message,
@@ -1105,20 +1165,32 @@ async def entrypoint(ctx: JobContext):
     )
 
     # ── Keepalive — prevents idle disconnect ─────────────────────────────────
+    last_activity = {"t": asyncio.get_event_loop().time()}
+
+    def mark_active():
+        last_activity["t"] = asyncio.get_event_loop().time()
+
+    # Track any room events as activity
+    ctx.room.on("participant_spoke", lambda *_: mark_active())
+
     async def keepalive_task():
-        """Send a gentle nudge every 25 seconds to prevent idle timeout."""
+        """Prevent idle disconnect — if silent for 45s, send a gentle prompt."""
         while True:
-            await asyncio.sleep(25)
+            await asyncio.sleep(20)
             try:
-                if session and hasattr(session, '_agent_session'):
-                    pass  # session is active
-            except Exception:
-                break
+                idle_secs = asyncio.get_event_loop().time() - last_activity["t"]
+                if idle_secs > 45:
+                    mark_active()
+                    await session.generate_reply(
+                        instructions="The user has been quiet. Gently ask if there is anything you can help with today. Keep it to one short sentence."
+                    )
+            except Exception as e:
+                logger.debug(f"keepalive tick: {e}")
 
     asyncio.create_task(keepalive_task())
 
     await session.generate_reply(
-        instructions="Greet the owner warmly. Mention you're their AI receptionist. Briefly hint at one thing you can help with today — appointments, documents, or a quick question. Be brief and enthusiastic."
+        instructions="Greet the owner warmly by name if you know it. Mention you're their AI receptionist and you can check availability and book appointments. Be brief, warm, and enthusiastic."
     )
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
