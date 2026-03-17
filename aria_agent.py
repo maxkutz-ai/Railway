@@ -161,30 +161,72 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
 
     try:
         if action == "create_appointment":
-            # Ensure appointments table exists, create minimal record
+            # Look up or create contact first
+            contact_id = None
+            contact_name = data.get("contact_name", "")
+            contact_phone = data.get("contact_phone", "")
+            try:
+                if contact_name:
+                    # Try to find existing contact
+                    names = contact_name.split(" ", 1)
+                    first = names[0]
+                    last  = names[1] if len(names) > 1 else ""
+                    cr = sb.from_("contacts").select("id").eq("business_id", business_id).ilike("first_name", f"%{first}%").limit(1).execute()
+                    if cr.data:
+                        contact_id = cr.data[0]["id"]
+                    else:
+                        # Create new contact
+                        nr = sb.from_("contacts").insert({
+                            "business_id": business_id,
+                            "first_name":  first,
+                            "last_name":   last,
+                            "phone":       contact_phone,
+                            "source":      "aria",
+                        }).execute()
+                        if nr.data:
+                            contact_id = nr.data[0]["id"]
+            except Exception:
+                pass
+
+            # Parse date+time into ISO timestamp
+            date_str = data.get("date", "")
+            time_str = data.get("time", "12:00 PM")
+            try:
+                from datetime import datetime as dt
+                start_dt = dt.strptime(f"{date_str} {time_str}", "%Y-%m-%d %I:%M %p")
+                end_dt   = start_dt + timedelta(hours=1)
+                start_iso = start_dt.isoformat()
+                end_iso   = end_dt.isoformat()
+            except Exception:
+                start_iso = f"{date_str}T12:00:00"
+                end_iso   = f"{date_str}T13:00:00"
+
             appt_data = {
-                "business_id":      business_id,
-                "contact_name":     data.get("contact_name"),
-                "contact_phone":    data.get("contact_phone", ""),
-                "service":          data.get("service", ""),
-                "staff_name":       data.get("staff_name", ""),
-                "appointment_date": data.get("date"),
-                "appointment_time": data.get("time"),
-                "notes":            data.get("notes", ""),
-                "status":           "confirmed",
-                "created_by":       "aria",
+                "business_id":    business_id,
+                "contact_id":     contact_id,
+                "start_time":     start_iso,
+                "end_time":       end_iso,
+                "service_type":   data.get("service", ""),
+                "technician_name":data.get("staff_name", ""),
+                "notes":          data.get("notes", ""),
+                "status":         "booked",
+                "job_status":     "confirmed",
+                "booking_source": "aria",
             }
             sb.from_("appointments").insert(appt_data).execute()
-            return f"Appointment confirmed for {data.get('contact_name')} on {data.get('date')} at {data.get('time')}."
+            return f"Appointment confirmed for {contact_name} on {data.get('date')} at {data.get('time')}."
 
         elif action == "create_contact":
+            names = (data.get("name") or "").split(" ", 1)
             sb.from_("contacts").insert({
                 "business_id": business_id,
-                "name":        data.get("name"),
+                "first_name":  names[0],
+                "last_name":   names[1] if len(names) > 1 else "",
                 "phone":       data.get("phone"),
                 "email":       data.get("email"),
                 "notes":       data.get("notes", ""),
                 "source":      "aria",
+                "lead_status": "lead",
             }).execute()
             return f"Contact {data.get('name')} saved."
 
@@ -201,15 +243,39 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
             return "Business hours updated successfully."
 
         elif action == "log_message":
+            # Real messages schema: needs contact_id, message_body, channel, direction
+            # Try to find or create contact
+            contact_id = None
+            from_phone = data.get("from_phone", "")
+            from_name  = data.get("from_name", "")
+            try:
+                if from_phone:
+                    cr = sb.from_("contacts").select("id").eq("business_id", business_id).ilike("phone", f"%{from_phone}%").limit(1).execute()
+                    if cr.data:
+                        contact_id = cr.data[0]["id"]
+                if not contact_id and from_name:
+                    names = from_name.split(" ", 1)
+                    nr = sb.from_("contacts").insert({
+                        "business_id": business_id,
+                        "first_name":  names[0],
+                        "last_name":   names[1] if len(names) > 1 else "",
+                        "phone":       from_phone,
+                        "source":      "aria",
+                    }).execute()
+                    if nr.data:
+                        contact_id = nr.data[0]["id"]
+            except Exception:
+                pass
+
             sb.from_("messages").insert({
-                "business_id": business_id,
-                "from_name":   data.get("from_name"),
-                "from_phone":  data.get("from_phone"),
-                "message":     data.get("message"),
-                "source":      "aria",
-                "is_read":     False,
+                "business_id":  business_id,
+                "contact_id":   contact_id,
+                "message_body": data.get("message"),
+                "channel":      "note",
+                "direction":    "inbound",
+                "is_read":      False,
             }).execute()
-            return f"Message from {data.get('from_name')} logged."
+            return f"Message from {from_name} logged."
 
         elif action == "add_to_waitlist":
             sb.from_("waitlist").insert({
@@ -616,10 +682,26 @@ async def entrypoint(ctx: JobContext):
         if not sb:
             return json.dumps({"error": "Database unavailable"})
         try:
-            r = sb.from_("contacts").select("name,phone,email,notes").eq("business_id", business_id).ilike("name", f"%{name_or_phone}%").limit(3).execute()
+            fields = "first_name,last_name,phone,email,notes,lead_status,is_vip,total_visits"
+            # Try first_name/last_name search
+            r = sb.from_("contacts").select(fields).eq("business_id", business_id).ilike("first_name", f"%{name_or_phone}%").limit(3).execute()
             if not r.data:
-                r = sb.from_("contacts").select("name,phone,email,notes").eq("business_id", business_id).ilike("phone", f"%{name_or_phone}%").limit(3).execute()
-            return json.dumps({"contacts": r.data or [], "found": len(r.data or [])})
+                r = sb.from_("contacts").select(fields).eq("business_id", business_id).ilike("last_name", f"%{name_or_phone}%").limit(3).execute()
+            if not r.data:
+                r = sb.from_("contacts").select(fields).eq("business_id", business_id).ilike("phone", f"%{name_or_phone}%").limit(3).execute()
+            # Format nicely
+            contacts = []
+            for c in (r.data or []):
+                contacts.append({
+                    "name":   f"{c.get('first_name','')} {c.get('last_name','')}".strip(),
+                    "phone":  c.get("phone",""),
+                    "email":  c.get("email",""),
+                    "status": c.get("lead_status",""),
+                    "vip":    c.get("is_vip", False),
+                    "visits": c.get("total_visits", 0),
+                    "notes":  c.get("notes",""),
+                })
+            return json.dumps({"contacts": contacts, "found": len(contacts)})
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -628,19 +710,28 @@ async def entrypoint(ctx: JobContext):
         """Get upcoming appointments for the business."""
         sb = get_supabase()
         if not sb:
-            return json.dumps({"appointments": [], "count": 0, "note": "Database unavailable"})
+            return json.dumps({"appointments": [], "count": 0})
         try:
-            today  = datetime.now().strftime("%Y-%m-%d")
-            future = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-            # Try appointments table first, fall back to bookings
-            for table in ["appointments", "bookings", "calendar_events"]:
-                try:
-                    r = sb.from_(table).select("*").eq("business_id", business_id).gte("appointment_date", today).lte("appointment_date", future).order("appointment_date").execute()
-                    if r.data is not None:
-                        return json.dumps({"appointments": r.data or [], "count": len(r.data or []), "table": table})
-                except Exception:
-                    continue
-            return json.dumps({"appointments": [], "count": 0, "note": "No appointments table found yet — the owner can add appointments through the dashboard."})
+            now    = datetime.now().isoformat()
+            future = (datetime.now() + timedelta(days=days_ahead)).isoformat()
+            # Real schema: appointments uses start_time (timestamptz), joined with contacts/staff/services
+            r = sb.from_("appointments")                 .select("id,start_time,end_time,status,job_status,service_type,technician_name,notes,contacts(first_name,last_name,phone),services(name),staff(name)")                 .eq("business_id", business_id)                 .gte("start_time", now)                 .lte("start_time", future)                 .order("start_time")                 .execute()
+            appts = []
+            for a in (r.data or []):
+                contact = a.get("contacts") or {}
+                name = f"{contact.get('first_name','')} {contact.get('last_name','')}".strip() or "Unknown"
+                service = (a.get("services") or {}).get("name") or a.get("service_type") or "Appointment"
+                staff   = (a.get("staff") or {}).get("name") or a.get("technician_name") or ""
+                appts.append({
+                    "contact": name,
+                    "phone":   contact.get("phone",""),
+                    "service": service,
+                    "staff":   staff,
+                    "time":    a.get("start_time",""),
+                    "status":  a.get("job_status") or a.get("status",""),
+                    "notes":   a.get("notes",""),
+                })
+            return json.dumps({"appointments": appts, "count": len(appts)})
         except Exception as e:
             return json.dumps({"appointments": [], "count": 0, "error": str(e)})
 
