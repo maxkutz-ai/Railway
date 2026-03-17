@@ -776,7 +776,9 @@ GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owne
 
 # ── Agent entry point ─────────────────────────────────────────────────────────
 async def entrypoint(ctx: JobContext):
+    logger.info(f"🚀 entrypoint() called — room: {ctx.room.name if ctx.room else 'unknown'}")
     await ctx.connect()
+    logger.info(f"✅ Connected to room: {ctx.room.name}")
 
     try:
         metadata = json.loads(ctx.room.metadata or "{}")
@@ -1240,8 +1242,8 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-    await avatar.start(session, room=ctx.room)
-
+    # Start session FIRST — then attach avatar
+    # In livekit-agents >= 0.12, session must be running before avatar.start()
     await session.start(
         agent=Agent(
             instructions=instructions,
@@ -1274,6 +1276,21 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
         room_options=room_io.RoomOptions(audio_output=False),
     )
+
+    # Start avatar AFTER session — attach Simli to the running session
+    # Retry on RPC timeout (common with cold starts)
+    for attempt in range(3):
+        try:
+            await avatar.start(session, room=ctx.room)
+            logger.info("✅ Simli avatar started")
+            break
+        except Exception as e:
+            if attempt < 2:
+                logger.warning(f"Avatar start attempt {attempt+1} failed: {e} — retrying in 2s")
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"Avatar start failed after 3 attempts: {e}")
+                # Continue without avatar — voice still works
 
     # ── Keepalive — prevents idle disconnect ─────────────────────────────────
     last_activity = {"t": asyncio.get_event_loop().time()}
@@ -1308,6 +1325,16 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    import sys
+    logger.info("=" * 60)
+    logger.info("Aria Agent starting up")
+    logger.info(f"Python: {sys.version}")
+    logger.info(f"LIVEKIT_URL: {os.getenv('LIVEKIT_URL', 'NOT SET')}")
+    logger.info(f"SIMLI_API_KEY set: {bool(os.getenv('SIMLI_API_KEY'))}")
+    logger.info(f"OPENAI_API_KEY set: {bool(os.getenv('OPENAI_API_KEY'))}")
+    logger.info(f"DEEPGRAM_API_KEY set: {bool(os.getenv('DEEPGRAM_API_KEY'))}")
+    logger.info(f"Deepgram available: {DEEPGRAM_AVAILABLE}")
+    logger.info("=" * 60)
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
         agent_name="aria-agent",
