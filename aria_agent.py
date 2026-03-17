@@ -774,6 +774,19 @@ GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owne
 """
 
 
+
+# WMO weather interpretation codes (module level)
+WMO_CODES: dict = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Foggy", 48: "Icy fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains",
+    80: "Rain showers", 81: "Heavy showers", 82: "Violent showers",
+    85: "Snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail",
+}
+
 # ── Agent entry point ─────────────────────────────────────────────────────────
 async def entrypoint(ctx: JobContext):
     logger.info(f"🚀 entrypoint() called — room: {ctx.room.name if ctx.room else 'unknown'}")
@@ -1059,46 +1072,78 @@ async def entrypoint(ctx: JobContext):
     async def get_weather(ctx: RunContext, location: str = "") -> str:
         """Get current weather for any location. ALWAYS call this tool immediately when asked about weather — never say you don't know without calling this first."""
         loc = location or biz_ctx.get("business_settings", {}).get("location_city") or "Denver, Colorado"
-        # Clean up location for URL
         loc_url = loc.strip().replace(" ", "+")
+
         try:
             async with httpx.AsyncClient(follow_redirects=True) as client:
-                # Try JSON format first
-                r = await client.get(f"https://wttr.in/{loc_url}?format=j1", timeout=8)
-                if r.status_code == 200:
-                    d = r.json()
-                    c = d["current_condition"][0]
-                    temp_f    = c.get("temp_F", "?")
-                    feels     = c.get("FeelsLikeF", "")
-                    desc      = (c.get("weatherDesc") or [{}])[0].get("value", "")
-                    humidity  = c.get("humidity", "")
-                    wind      = c.get("windspeedMiles", "")
-                    summary   = f"{temp_f}°F"
-                    if desc:
-                        summary += f", {desc}"
-                    if feels and feels != temp_f:
-                        summary += f" (feels like {feels}°F)"
-                    if wind:
-                        summary += f", wind {wind} mph"
-                    return json.dumps({
-                        "location":    loc,
-                        "summary":     summary,
-                        "temp_f":      temp_f,
-                        "description": desc,
-                        "humidity":    humidity + "%" if humidity else "",
-                        "wind_mph":    wind,
-                    })
+                # Step 1: Geocode location via Open-Meteo (free, no key)
+                geo_r = await client.get(
+                    f"https://geocoding-api.open-meteo.com/v1/search?name={loc_url}&count=1&language=en&format=json",
+                    timeout=6
+                )
+                if geo_r.status_code != 200:
+                    raise Exception(f"Geocode failed: {geo_r.status_code}")
 
-                # Fallback: simple one-line format
-                r2 = await client.get(f"https://wttr.in/{loc_url}?format=3", timeout=5)
-                if r2.status_code == 200:
-                    text = r2.text.strip()
-                    return json.dumps({"location": loc, "summary": text})
+                geo = geo_r.json()
+                results = geo.get("results") or []
+                if not results:
+                    return json.dumps({"error": f"Location not found: {loc}"})
+
+                r0   = results[0]
+                lat  = r0["latitude"]
+                lon  = r0["longitude"]
+                name = r0.get("name", loc)
+                area = r0.get("admin1", "")  # state/region
+
+                # Step 2: Get current weather
+                wx_r = await client.get(
+                    f"https://api.open-meteo.com/v1/forecast"
+                    f"?latitude={lat}&longitude={lon}"
+                    f"&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m"
+                    f"&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=1",
+                    timeout=6
+                )
+                if wx_r.status_code != 200:
+                    raise Exception(f"Weather fetch failed: {wx_r.status_code}")
+
+                c = wx_r.json()["current"]
+
+                # WMO weather code → description
+                code = c.get("weather_code", 0)
+                desc = WMO_CODES.get(code, "")
+
+                temp_f   = round(c.get("temperature_2m", 0))
+                feels    = round(c.get("apparent_temperature", temp_f))
+                wind     = round(c.get("wind_speed_10m", 0))
+                humidity = round(c.get("relative_humidity_2m", 0))
+
+                city = f"{name}, {area}" if area else name
+                summary = f"{temp_f}°F"
+                if desc:
+                    summary += f" and {desc.lower()}"
+                if abs(feels - temp_f) >= 5:
+                    summary += f" (feels like {feels}°F)"
+                if wind > 15:
+                    summary += f", winds {wind} mph"
+
+                return json.dumps({
+                    "location":    city,
+                    "summary":     summary,
+                    "temp_f":      temp_f,
+                    "feels_like":  feels,
+                    "description": desc,
+                    "humidity":    humidity,
+                    "wind_mph":    wind,
+                })
 
         except Exception as e:
             logger.warning(f"Weather tool error for '{loc}': {e}")
+            return json.dumps({
+                "location": loc,
+                "error":    f"Weather service temporarily unavailable for {loc}.",
+                "suggestion": "Tell the user the exact temperature is unavailable right now and suggest weather.com."
+            })
 
-        return json.dumps({"location": loc, "error": f"Could not retrieve weather for {loc}. Tell the user the weather is temporarily unavailable and suggest weather.com."})
 
     @function_tool
     async def web_search(ctx: RunContext, query: str) -> str:
