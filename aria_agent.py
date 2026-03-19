@@ -863,7 +863,12 @@ CRITICAL: You HAVE access to the live data above. When asked about appointments,
             5: """CALLS: "The Calls section shows every call to your business number — answered, missed, and handled by me. You can see transcripts, listen to recordings, and see what each caller needed. Missed calls get flagged so you never lose a lead." Ask: "Questions about Calls?" Then call navigate_to_section("pipeline") and complete_onboarding_chapter(5).""",
             6: """PIPELINE: "Your Pipeline is a visual sales board — move contacts through stages like New Inquiry, Qualified, Booked, and Completed. Great for tracking prospects who haven't booked yet. Drag and drop cards between columns." Ask: "Questions about Pipeline?" Then call navigate_to_section("campaigns") and complete_onboarding_chapter(6).""",
             7: """CAMPAIGNS: "Campaigns is your built-in email newsletter tool. Add subscribers, compose emails with the rich editor, and send to your list with one click. Your website embed code is in the Subscribers tab — paste it on your website and visitors can subscribe directly." Ask: "Questions about Campaigns?" Then call navigate_to_section("settings") and complete_onboarding_chapter(7).""",
-            8: """SETTINGS: "Finally, Settings. This is where you configure your AI receptionist — give me a personality, set your services, business hours, and knowledge base. I learn from your website automatically. You can also manage integrations like Cal.com for scheduling and Twilio for calls. The Appearance section lets you change colors and theme. And under Notifications, you can set where booking alerts get sent." Ask: "Do you have any final questions about Settings or anything else we covered?" Wait for answer. Then say: "You're all set [name]! I'm ready to start working for your business. Let me know whenever you want to review anything or have questions. Click 'Start Using My Dashboard' to officially begin!" Call finish_onboarding().""",
+            8: """SETTINGS: "Finally, Settings. This is where you configure your AI receptionist — give me a personality, set your services, business hours, and knowledge base. You can also manage integrations like Cal.com for scheduling and Twilio for calls. The Appearance section lets you change colors and theme." 
+Ask: "Do you have a website? I can scan it right now to learn your services, hours, pricing, and FAQs — so I can answer client questions accurately from day one."
+If YES: Ask for the URL, then call scan_website(url). Say "Give me a moment to scan your site..." then report what was found.
+If NO or SKIP: "No problem! You can add it later in Settings → Knowledge."
+Then ask: "Is there anything else you'd like to know before we wrap up?" Wait for answer.
+Then say: "You're all set! I'll rescan your website every day automatically to stay up to date. Click 'Start Using My Dashboard' to begin!" Call finish_onboarding().""",
         }
         current_script = chapter_scripts.get(onboarding_chapter, chapter_scripts[0])
         instructions = instructions + f"""
@@ -959,6 +964,39 @@ ONBOARDING RULES:
             return f"Chapter {chapter} complete. Moving to chapter {chapter + 1}."
         except Exception as e:
             return f"Chapter progress noted."
+
+    @function_tool
+    async def scan_website(ctx: RunContext, website_url: str) -> str:
+        """Scan a business website to extract services, hours, pricing, FAQs and store in knowledge base.
+        Call this during onboarding when the owner provides their website URL.
+        This overwrites any previous website scan data.
+        Returns a summary of what was found.
+        """
+        try:
+            import httpx
+            app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.receptionist.co")
+            # Save website_url to settings_business first
+            sb = get_supabase()
+            if sb:
+                sb.table("settings_business").update({"website_url": website_url}).eq("business_id", business_id).execute()
+                # Clear old website knowledge before re-scanning
+                sb.table("ai_memory").delete().eq("business_id", business_id).eq("category", "website_content").execute()
+
+            # Call the knowledge ingest API
+            async with httpx.AsyncClient(timeout=25) as client:
+                resp = await client.post(
+                    f"{app_url}/api/knowledge/ingest",
+                    json={"business_id": business_id, "type": "url", "url": website_url},
+                )
+                data = resp.json()
+                if data.get("ok"):
+                    saved = data.get("saved", 0)
+                    return f"Website scanned successfully! I found and saved {saved} pieces of information about your business — including services, hours, and FAQs. I'll use this to answer client questions accurately."
+                else:
+                    return f"I had trouble reading that website ({data.get('error', 'unknown error')}). Please check the URL is correct and publicly accessible. You can try again in Settings → Knowledge."
+        except Exception as e:
+            logger.error(f"scan_website error: {e}")
+            return "I couldn't scan the website right now, but you can add it later in Settings → Knowledge and I'll scan it automatically."
 
     @function_tool
     async def finish_onboarding(ctx: RunContext) -> str:
