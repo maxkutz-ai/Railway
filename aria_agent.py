@@ -1521,10 +1521,13 @@ ONBOARDING RULES:
         llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
         tts=openai.TTS(model="tts-1", voice="shimmer"),
         vad=silero.VAD.load(
-            min_silence_duration=0.6,   # 0.6s — faster
-            min_speech_duration=0.05,   # catch even soft/short speech
-            activation_threshold=0.35,  # lower = more sensitive mic pickup
+            min_silence_duration=0.6,
+            min_speech_duration=0.05,
+            activation_threshold=0.35,
         ),
+        allow_interruptions=True,
+        interrupt_speech_duration=0.5,
+        interrupt_min_words=1,
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
@@ -1623,10 +1626,22 @@ ONBOARDING RULES:
 
     # ai_name from config (safe fallback)
     _ai_name = (biz_ctx.get("config") or {}).get("ai_name") or "Aria"
-    _owner   = (biz_ctx.get("config") or {}).get("owner_name") or ""
+    # Check owner name: first from memories (saved by Aria), then from config
+    _owner = ""
+    for m in memories:
+        if "owner_first_name" in m.lower() or "owner_info" in m.lower():
+            # Extract value after colon
+            parts = m.split(":", 2)
+            if len(parts) >= 3 and "owner_first_name" in parts[1].lower():
+                _owner = parts[2].strip()
+                break
+    if not _owner:
+        _owner = (biz_ctx.get("config") or {}).get("owner_name") or ""
+    if _owner:
+        logger.info(f"Greeting owner by name: {_owner}")
     _greeting_hint = f"Give a warm 1-sentence greeting as {_ai_name}."
     if _owner:
-        _greeting_hint += f" Address {_owner} by name."
+        _greeting_hint += f" The owner's name is {_owner} — address them by name warmly."
     _greeting_hint += " One sentence only."
 
     try:
