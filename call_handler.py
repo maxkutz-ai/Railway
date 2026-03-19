@@ -199,7 +199,7 @@ async def call_websocket(ws: WebSocket):
                     "voice": "alloy",
                     "instructions": prompt,
                     "modalities": ["text", "audio"],
-                    "temperature": 0.4,
+                    "temperature": 0.8,
                 }
             }))
 
