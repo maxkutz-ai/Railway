@@ -610,6 +610,17 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     doc_text = ", ".join(doc_sources) + " (use search_documents tool)" if doc_sources else "None connected yet"
 
     mem_text = "\n".join(m[:150] for m in memories[:20]) if memories else "Nothing saved yet."
+
+    # Load scanned knowledge (last 5 items, summarized)
+    kb_text = ""
+    try:
+        sb_kb = get_supabase()
+        if sb_kb and business_id:
+            kb_res = sb_kb.from_("knowledge_base").select("content_text").eq("business_id", business_id).order("created_at", desc=True).limit(8).execute()
+            if kb_res.data:
+                snippets = [r["content_text"][:200] for r in kb_res.data if r.get("content_text")]
+                kb_text = "\n".join(snippets[:5])
+    except: pass
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
     industry_key    = detect_industry(biz_ctx)
@@ -621,11 +632,11 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     industry_asks   = ", ".join(industry_script["common_asks"][:5])
 
     # Custom instructions override — if the business has a custom prompt, inject it
-    custom_instructions = cfg.get("custom_instructions") or ""
+    custom_instructions = (cfg.get("custom_instructions") or "")[:3000]
     ai_name             = cfg.get("ai_name") or "Aria"
     role_description    = cfg.get("role_description") or ""
     primary_goal        = cfg.get("primary_goal") or ""
-    anti_hallucination  = cfg.get("anti_hallucination_rule") or "If uncertain, say: I don't want to guess - I'll have our team follow up on that." 
+    anti_hallucination  = cfg.get("anti_hallucination_rule") or "If uncertain about specific details, say: 'I want to make sure I get this right — let me check and come back to you in a moment.' Then look it up using your tools." 
     turn_taking_strict  = cfg.get("turn_taking_strict", True)
     rush_mode_enabled   = cfg.get("rush_mode_enabled", True)
 
@@ -704,6 +715,7 @@ When asked about files, menus, policies, or stored info — always use search_do
 
 ━━━ MEMORY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {mem_text}
+{f"━━━ SCANNED WEBSITE KNOWLEDGE ━━━━━━━━━━━━{chr(10)}{kb_text}" if kb_text else ""}
 
 ━━━ CONFIRMATION RULES (CRITICAL) ━━━━━━━
 ALWAYS ask before acting:
