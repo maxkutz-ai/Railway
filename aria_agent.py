@@ -832,8 +832,16 @@ async def entrypoint(ctx: JobContext):
 
     instructions = build_system_prompt(biz_ctx, memories, location)
 
+    # Check if in onboarding mode
+    is_onboarding = "ONBOARDING_MODE" in dashboard_ctx if dashboard_ctx else False
+    onboarding_chapter = 0
+    if is_onboarding:
+        import re
+        m = re.search(r"CHAPTER:(\d+)", dashboard_ctx)
+        if m: onboarding_chapter = int(m.group(1))
+
     # Inject live dashboard context into instructions
-    if dashboard_ctx:
+    if dashboard_ctx and not is_onboarding:
         instructions = instructions + f"""
 
 ━━━ LIVE DASHBOARD DATA (use this to answer status questions) ━━━
@@ -841,6 +849,42 @@ async def entrypoint(ctx: JobContext):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 CRITICAL: You HAVE access to the live data above. When asked about appointments, calls, messages, or status — read directly from the LIVE DASHBOARD DATA section above. Never say "I don't have access to that information."
+"""
+
+    # Onboarding mode — full guided tour script
+    if is_onboarding:
+        chapter_scripts = {
+            0: """INTRO: Welcome them warmly. "Hi! I'm Aria, your AI receptionist. I'm here 24/7 to manage your calls, appointments, messages, and keep your business running smoothly. This quick tour will take about 20-30 minutes and is completely free — it won't count against your plan minutes. Let's start by getting to know each other. What's your name?" Save their name. Then say: "Great to meet you [name]! I'm going to walk you through your new dashboard. Ready to start?" Call navigate_to_section("dashboard") then complete_onboarding_chapter(0).""",
+            1: """DASHBOARD: "You're looking at your main Dashboard. This is your command center — it shows today's appointments, recent calls, unread messages, and smart alerts. The colorful circles show your AI performance stats. You can ask me to change the colors or theme anytime — just say something like 'make it darker' or 'switch to a light theme'. The banner at the top shows urgent alerts that need attention." Ask: "Do you have any questions about the dashboard?" Wait for answer. Then call navigate_to_section("contacts") and complete_onboarding_chapter(1).""",
+            2: """CONTACTS: "This is your Contacts section — think of it as your smart client database. Every person who calls, messages, or books gets a profile here automatically. You can see their full history — calls, appointments, messages — all in one place. You can tag contacts as VIP, Lead, or Client." Ask: "Any questions about Contacts?" Then call navigate_to_section("appointments") and complete_onboarding_chapter(2).""",
+            3: """APPOINTMENTS: "Here's your Appointments section. You can view by Day, Week, or Month. Click any appointment to confirm, cancel, or mark if the client showed up. The search bar and colored filters at the top let you find appointments quickly. I can book appointments for you directly — just ask me." Ask: "Questions about Appointments?" Then call navigate_to_section("messages") and complete_onboarding_chapter(3).""",
+            4: """INBOX: "This is your Inbox — all two-way SMS conversations with clients. When someone texts your business number, it appears here. You can reply directly. I also send booking confirmations and reminders automatically. Type your message and hit Send, or ask me to draft a reply for you." Ask: "Questions about Inbox?" Then call navigate_to_section("calls") and complete_onboarding_chapter(4).""",
+            5: """CALLS: "The Calls section shows every call to your business number — answered, missed, and handled by me. You can see transcripts, listen to recordings, and see what each caller needed. Missed calls get flagged so you never lose a lead." Ask: "Questions about Calls?" Then call navigate_to_section("pipeline") and complete_onboarding_chapter(5).""",
+            6: """PIPELINE: "Your Pipeline is a visual sales board — move contacts through stages like New Inquiry, Qualified, Booked, and Completed. Great for tracking prospects who haven't booked yet. Drag and drop cards between columns." Ask: "Questions about Pipeline?" Then call navigate_to_section("campaigns") and complete_onboarding_chapter(6).""",
+            7: """CAMPAIGNS: "Campaigns is your built-in email newsletter tool. Add subscribers, compose emails with the rich editor, and send to your list with one click. Your website embed code is in the Subscribers tab — paste it on your website and visitors can subscribe directly." Ask: "Questions about Campaigns?" Then call navigate_to_section("settings") and complete_onboarding_chapter(7).""",
+            8: """SETTINGS: "Finally, Settings. This is where you configure your AI receptionist — give me a personality, set your services, business hours, and knowledge base. I learn from your website automatically. You can also manage integrations like Cal.com for scheduling and Twilio for calls. The Appearance section lets you change colors and theme. And under Notifications, you can set where booking alerts get sent." Ask: "Do you have any final questions about Settings or anything else we covered?" Wait for answer. Then say: "You're all set [name]! I'm ready to start working for your business. Let me know whenever you want to review anything or have questions. Click 'Start Using My Dashboard' to officially begin!" Call finish_onboarding().""",
+        }
+        current_script = chapter_scripts.get(onboarding_chapter, chapter_scripts[0])
+        instructions = instructions + f"""
+
+━━━ ONBOARDING MODE — FREE SESSION (no minutes charged) ━━━━━━
+You are guiding {business_name} through their onboarding tour.
+Current chapter: {onboarding_chapter}
+
+YOUR SCRIPT FOR THIS CHAPTER:
+{current_script}
+
+ONBOARDING RULES:
+- Go at the owner's pace. If they have questions, answer them fully.
+- After each section, always ask "Do you have any questions?" and wait.
+- Be warm, encouraging, and celebratory — this is their new business tool!
+- If they want to skip a section: say "No problem!" and move on.
+- If they want to pause: say "Of course! Just come back whenever you're ready — we'll pick up right where we left off."
+- Use navigate_to_section() to move them between CRM sections.
+- Use complete_onboarding_chapter() after each section.
+- Use finish_onboarding() only at the very end after Settings.
+- This session is FREE — remind them if they ask about minutes.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
     logger.info(f"System prompt length: {len(instructions)} chars")
 
@@ -852,6 +896,87 @@ CRITICAL: You HAVE access to the live data above. When asked about appointments,
         category: owner_info | preference | business_rule | client_note | instruction | general"""
         await save_memory_to_db(business_id, key, value, category)
         return f"Saved: {key} = {value}"
+
+    @function_tool
+    async def set_dashboard_theme(ctx: RunContext, theme: str) -> str:
+        """Change the dashboard color theme for the owner.
+        theme options:
+          dark themes: "midnight" | "deep_slate" | "true_void" | "charcoal" | "obsidian"
+          light themes: "pure_white" | "snow" | "mist" | "cream"
+          accent colors: "blue" | "purple" | "green" | "amber" | "pink"
+        Example: set_dashboard_theme("obsidian") or set_dashboard_theme("blue")
+        Say: "I've updated your dashboard to [theme] — it will refresh in a moment."
+        """
+        try:
+            sb = get_supabase()
+            if sb:
+                await sb.table("ai_memory").upsert({
+                    "business_id": business_id,
+                    "memory_key":  "dashboard_theme_change",
+                    "memory_value": theme,
+                    "category":    "preference",
+                }, on_conflict="business_id,memory_key").execute()
+            return f"Dashboard theme change requested: {theme}. The dashboard will update when they refresh."
+        except Exception as e:
+            return f"Theme request noted: {theme}"
+
+    @function_tool
+    async def navigate_to_section(ctx: RunContext, section: str) -> str:
+        """Navigate the owner to a specific section of the CRM dashboard.
+        section: "dashboard" | "contacts" | "appointments" | "messages" | "calls" | "pipeline" | "analytics" | "campaigns" | "settings"
+        Use during onboarding to guide the owner through different sections.
+        """
+        valid = ["dashboard","contacts","appointments","messages","calls","pipeline","analytics","campaigns","settings"]
+        if section not in valid:
+            return f"Unknown section: {section}. Valid: {', '.join(valid)}"
+        # Signal via memory that we want to navigate
+        try:
+            sb = get_supabase()
+            if sb:
+                await sb.table("ai_memory").upsert({
+                    "business_id": business_id,
+                    "memory_key":  "aria_navigate_request",
+                    "memory_value": section,
+                    "category":    "preference",
+                }, on_conflict="business_id,memory_key").execute()
+        except: pass
+        return f"Navigating to {section} section."
+
+    @function_tool
+    async def complete_onboarding_chapter(ctx: RunContext, chapter: int) -> str:
+        """Mark an onboarding chapter as complete and advance to the next.
+        chapters: 0=intro, 1=dashboard, 2=contacts, 3=appointments, 4=inbox, 5=calls, 6=pipeline, 7=campaigns, 8=settings, 9=done
+        Call this after finishing each section during onboarding.
+        """
+        try:
+            sb = get_supabase()
+            if sb:
+                await sb.table("onboarding_sessions").update({
+                    "current_chapter": chapter + 1,
+                    "last_active_at": datetime.utcnow().isoformat(),
+                }).eq("business_id", business_id).execute()
+            return f"Chapter {chapter} complete. Moving to chapter {chapter + 1}."
+        except Exception as e:
+            return f"Chapter progress noted."
+
+    @function_tool
+    async def finish_onboarding(ctx: RunContext) -> str:
+        """Call this when the onboarding tour is fully complete.
+        This marks onboarding as done and prompts the owner to start using their dashboard.
+        """
+        try:
+            sb = get_supabase()
+            if sb:
+                await sb.table("onboarding_sessions").update({
+                    "status": "completed",
+                    "completed_at": datetime.utcnow().isoformat(),
+                }).eq("business_id", business_id).execute()
+                await sb.table("settings_business").update({
+                    "onboarding_completed": True,
+                    "onboarding_completed_at": datetime.utcnow().isoformat(),
+                }).eq("business_id", business_id).execute()
+        except: pass
+        return "Onboarding complete. Showing the owner the dashboard start confirmation."
 
     @function_tool
     async def check_availability(
