@@ -41,7 +41,7 @@ SUPABASE_URL     = os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC
 SUPABASE_KEY     = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 PORT             = int(os.environ.get("PORT", 8080))
 
-OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview"
+OPENAI_WS_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
 
 
 def get_supabase() -> Optional[Client]:
@@ -174,8 +174,14 @@ async def call_websocket(ws: WebSocket):
 
     import websockets
 
+    logger.info(f"Connecting to OpenAI Realtime API...")
     try:
-        async with websockets.connect(OPENAI_WS_URL, additional_headers=headers) as openai_ws:
+        async with websockets.connect(
+            OPENAI_WS_URL,
+            additional_headers=headers,
+            open_timeout=10,
+        ) as openai_ws:
+            logger.info("✓ OpenAI Realtime connected")
 
             # Configure OpenAI session
             await openai_ws.send(json.dumps({
@@ -238,6 +244,15 @@ async def call_websocket(ws: WebSocket):
                     data = json.loads(raw)
                     event_type = data.get("type", "")
 
+                    # Log OpenAI errors
+                    if event_type == "error":
+                        logger.error(f"OpenAI error: {data.get('error', {})}")
+                        continue
+
+                    # Log session created
+                    if event_type == "session.created":
+                        logger.info("✓ OpenAI session created — Aria is ready")
+
                     # Stream audio back to Twilio
                     if event_type == "response.audio.delta" and stream_sid:
                         await ws.send_text(json.dumps({
@@ -261,16 +276,25 @@ async def call_websocket(ws: WebSocket):
                     elif event_type == "input_audio_buffer.speech_started":
                         await openai_ws.send(json.dumps({"type": "response.cancel"}))
 
-            # Run both streams concurrently
-            await asyncio.gather(
+            # Run both streams concurrently — return_exceptions so errors are logged
+            logger.info("Starting audio streams...")
+            results = await asyncio.gather(
                 receive_from_twilio(),
                 receive_from_openai(),
+                return_exceptions=True,
             )
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.error(f"Stream error: {r}")
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
+    except websockets.exceptions.InvalidStatus as e:
+        logger.error(f"OpenAI rejected connection: {e.response.status_code} — check API key and model name")
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.error(f"OpenAI connection closed: code={e.code} reason={e.reason}")
     except Exception as e:
-        logger.error(f"Call handler error: {e}")
+        logger.error(f"Call handler error: {type(e).__name__}: {e}", exc_info=True)
     finally:
         # Save transcript summary to Supabase
         if call_sid and transcript_parts:
