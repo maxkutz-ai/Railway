@@ -96,7 +96,7 @@ async def load_business_context(business_id: str) -> dict:
         if svcs.data:
             results["services"] = svcs.data
 
-        staff = sb.from_("staff").select("name,role,email,calendar_url").eq("business_id", business_id).eq("is_active", True).execute()
+        staff = sb.from_("staff").select("name,role,email").eq("business_id", business_id).eq("is_active", True).execute()
         if staff.data:
             results["staff"] = staff.data
 
@@ -1601,7 +1601,13 @@ ONBOARDING RULES:
         _greeting_hint += f" Address {_owner} by name."
     _greeting_hint += " One sentence only."
 
-    await session.generate_reply(instructions=_greeting_hint)
+    try:
+        await session.generate_reply(instructions=_greeting_hint)
+    except RuntimeError as e:
+        if "closing" in str(e).lower():
+            logger.info("Session closed before greeting — user disconnected quickly")
+        else:
+            raise
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
 
