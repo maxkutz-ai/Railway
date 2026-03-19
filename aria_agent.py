@@ -789,6 +789,7 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • Never ask for something already in memory
 • Never say "I can't" if you have a tool for it
 • No markdown, no bullet points — natural speech only
+• WEBSITE SCANNING: You CAN scan the owner's website. If asked to "scan my website" or "learn from my website", say "Sure! Please enter your website URL in the popup that just appeared." Then use the scan_website tool with the URL they provide. Report back what you found.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
 • Search documents or web before admitting ignorance
@@ -973,6 +974,24 @@ ONBOARDING RULES:
             return f"Chapter {chapter} complete. Moving to chapter {chapter + 1}."
         except Exception as e:
             return f"Chapter progress noted."
+
+    @function_tool
+    async def request_website_url(ctx: RunContext) -> str:
+        """Call this when the owner asks to scan their website but hasn't provided a URL yet.
+        This shows a URL input popup in the dashboard.
+        Say: "I've opened a window for you to enter your website URL. Once you submit it, I'll scan it right away!"
+        """
+        try:
+            sb = get_supabase()
+            if sb:
+                await sb.table("ai_memory").upsert({
+                    "business_id": business_id,
+                    "memory_key": "aria_request_website_url",
+                    "memory_value": "1",
+                    "category": "preference",
+                }, on_conflict="business_id,memory_key").execute()
+        except: pass
+        return "Popup shown. Waiting for owner to enter their website URL."
 
     @function_tool
     async def scan_website(ctx: RunContext, website_url: str) -> str:
