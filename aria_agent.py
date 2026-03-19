@@ -1607,13 +1607,7 @@ ONBOARDING RULES:
     _greeting_hint += " One sentence only."
 
     try:
-        try:
         await session.generate_reply(instructions=_greeting_hint)
-    except RuntimeError as e:
-        if "closing" in str(e).lower():
-            logger.info("Session closed before greeting — user disconnected quickly")
-        else:
-            raise
     except RuntimeError as e:
         if "closing" in str(e).lower():
             logger.info("Session closed before greeting — user disconnected quickly")
