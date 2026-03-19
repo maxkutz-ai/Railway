@@ -104,7 +104,7 @@ async def load_business_context(business_id: str) -> dict:
         if locs.data:
             results["locations"] = locs.data
 
-        mems = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", business_id).order("updated_at", desc=True).limit(150).execute()
+        mems = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", business_id).order("created_at", desc=True).limit(150).execute()
         if mems.data:
             results["memories"] = mems.data
 
@@ -253,7 +253,7 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
             sb.from_("business_settings").upsert({
                 "business_id":    business_id,
                 "business_hours": data.get("hours"),
-                "updated_at":     datetime.now().isoformat(),
+                "created_at":     datetime.now().isoformat(),
             }, on_conflict="business_id").execute()
             sb.from_("ai_settings").upsert({
                 "business_id":    business_id,
@@ -789,11 +789,11 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • Never ask for something already in memory
 • Never say "I can't" if you have a tool for it
 • No markdown, no bullet points — natural speech only
-• WEBSITE SCANNING: You CAN and SHOULD scan websites. Rules:
-  - If asked to scan website AND no URL given: say "Sure! What's your website URL?" and wait. When they give you a URL, IMMEDIATELY call scan_website(website_url=<url>).
-  - If the user types a URL (starts with http:// or https:// or looks like a domain): call scan_website(website_url=<url>) RIGHT AWAY. Do not ask for confirmation first.
+• WEBSITE SCANNING: You CAN scan websites. Rules:
+  - If asked to scan website: say "I've opened the website scanner for you — look for the popup on screen, or click the 🌐 Scan My Website button in the sidebar. Type your URL there and I'll scan it instantly!"
+  - If the user SPEAKS a URL (you hear it via voice, e.g. "southamptonspa dot com"): reconstruct it as https://southamptonspa.com and call scan_website(website_url=...) IMMEDIATELY.
   - After scan_website returns, tell the owner what you found in 2-3 sentences.
-  - NEVER say "I didn't receive the URL" — if they typed a URL, you have it. Use it.
+  - IMPORTANT: The chat box is VOICE ONLY. Users cannot type URLs to you — direct them to the popup/sidebar button instead.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
 • Search documents or web before admitting ignorance
