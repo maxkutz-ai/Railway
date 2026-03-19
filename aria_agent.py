@@ -162,6 +162,8 @@ def add_pending(action: str, data: dict, description: str) -> str:
 
 
 async def _execute_confirmed(business_id: str, conf_id: str) -> str:
+    if not business_id or len(business_id) < 10:
+        return "Cannot complete action — session not fully loaded. Please try again."
     pending = pending_confirmations.pop(conf_id, None)
     if not pending:
         return "Confirmation not found or already processed."
@@ -1034,6 +1036,8 @@ ONBOARDING RULES:
         date: YYYY-MM-DD format (e.g. "2025-03-18")
         service: optional service name to filter by
         Always call this BEFORE offering specific times to the owner."""
+        if not business_id or len(business_id) < 10:
+            return "Session still loading — please wait a moment and try again."
         try:
             # Find service_id if service name given
             service_id = None
