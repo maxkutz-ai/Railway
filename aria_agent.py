@@ -817,8 +817,11 @@ async def entrypoint(ctx: JobContext):
     business_id   = metadata.get("business_id", "")
     business_name = metadata.get("business_name", "the business")
     location      = metadata.get("location", "")
+    dashboard_ctx = metadata.get("context", "")  # live status data from dashboard
 
     logger.info(f"Session: {business_name} ({business_id}) @ {location}")
+    if dashboard_ctx:
+        logger.info(f"Dashboard context received: {len(dashboard_ctx)} chars")
 
     biz_ctx  = await load_business_context(business_id)
     memories = [f"[{r['category']}] {r['memory_key']}: {r['memory_value']}" for r in biz_ctx.get("memories", [])]
@@ -828,6 +831,18 @@ async def entrypoint(ctx: JobContext):
         business_name = biz_ctx["business"]["name"]
 
     instructions = build_system_prompt(biz_ctx, memories, location)
+
+    # Inject live dashboard context into instructions
+    if dashboard_ctx:
+        instructions = instructions + f"""
+
+━━━ LIVE DASHBOARD DATA (use this to answer status questions) ━━━
+{dashboard_ctx}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CRITICAL: You HAVE access to the live data above. When asked about appointments, calls, messages, or status — read directly from the LIVE DASHBOARD DATA section above. Never say "I don't have access to that information."
+"""
+    logger.info(f"System prompt length: {len(instructions)} chars")
 
     # ── TOOLS ──────────────────────────────────────────────────────────────────
 
