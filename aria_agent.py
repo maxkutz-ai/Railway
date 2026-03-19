@@ -859,6 +859,7 @@ async def entrypoint(ctx: JobContext):
 CRITICAL: You HAVE access to the live data above. When asked about appointments, calls, messages, or status — read directly from the LIVE DASHBOARD DATA section above. 
 NEVER say "I don't have access to that information" or "I don't want to guess" — you have the data, use it.
 NEVER say "I'll have our team follow up" for status questions — answer directly from the data above.
+INTERRUPTIONS: If the user interrupts you mid-sentence, acknowledge what they said and answer their question directly. Don't restart your previous sentence — pivot naturally to what they asked.
 OWNER NAME RULE: When the owner gives their name, ALWAYS spell it back: "Got it — is that spelled M-A-X?" and wait for confirmation before saving. This prevents mishearing errors. Once confirmed, save with save_memory.
 """
 
@@ -1526,8 +1527,6 @@ ONBOARDING RULES:
             activation_threshold=0.35,
         ),
         allow_interruptions=True,
-        interrupt_speech_duration=0.5,
-        interrupt_min_words=1,
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
