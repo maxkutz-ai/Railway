@@ -609,7 +609,7 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
         doc_sources.append("Dropbox")
     doc_text = ", ".join(doc_sources) + " (use search_documents tool)" if doc_sources else "None connected yet"
 
-    mem_text = "\n".join(memories) if memories else "Nothing saved yet."
+    mem_text = "\n".join(m[:150] for m in memories[:20]) if memories else "Nothing saved yet."
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
     industry_key    = detect_industry(biz_ctx)
@@ -865,6 +865,9 @@ NEVER say "I don't have access to that information" or "I don't want to guess" �
 NEVER say "I'll have our team follow up" — EVER. Not for any reason.
 NEVER say "I don't have access to your contacts" — the contacts ARE on the dashboard and in context.
 NEVER ask for a contact number — you already have it in the dashboard data.
+NEVER say "Please hold on a moment" — this causes you to freeze. If you need to look something up, do it silently and respond immediately.
+NEVER say "let me confirm that for you" then pause — answer immediately with what you know from the dashboard data.
+BUSINESS NAME: The business name is in your system prompt. You know it. Never ask what business the owner manages.
 INTERRUPTIONS: If the user interrupts you mid-sentence, acknowledge what they said and answer their question directly. Don't restart your previous sentence — pivot naturally to what they asked.
 OWNER NAME RULE: When the owner gives their name, ALWAYS spell it back: "Got it — is that spelled M-A-X?" and wait for confirmation before saving. This prevents mishearing errors. Once confirmed, save with save_memory.
 """
@@ -1631,14 +1634,18 @@ ONBOARDING RULES:
 
     # ai_name from config (safe fallback)
     _ai_name = (biz_ctx.get("config") or {}).get("ai_name") or "Aria"
-    # Check owner name: first from memories (saved by Aria), then from config
+    # Check owner name: only from owner_first_name key in memories
     _owner = ""
     for m in memories:
-        if "owner_first_name" in m.lower() or "owner_info" in m.lower():
-            # Extract value after colon
-            parts = m.split(":", 2)
-            if len(parts) >= 3 and "owner_first_name" in parts[1].lower():
-                _owner = parts[2].strip()
+        parts = m.split(":", 2)
+        if len(parts) >= 3 and "owner_first_name" in parts[1].lower():
+            candidate = parts[2].strip()
+            # Validate: must look like a real name (2-20 chars, alpha only, no bad words)
+            bad_names = {"back", "yes", "no", "ok", "okay", "hi", "hello", "the", "test"}
+            if (2 <= len(candidate) <= 20 and 
+                candidate.replace(" ", "").isalpha() and 
+                candidate.lower() not in bad_names):
+                _owner = candidate
                 break
     if not _owner:
         _owner = (biz_ctx.get("config") or {}).get("owner_name") or ""
