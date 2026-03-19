@@ -100,7 +100,7 @@ async def load_business_context(business_id: str) -> dict:
         if staff.data:
             results["staff"] = staff.data
 
-        locs = sb.from_("locations").select("name,address,city,state,zip,phone,parking_info").eq("business_id", business_id).execute()
+        locs = sb.from_("locations").select("name,address,phone").eq("business_id", business_id).execute()
         if locs.data:
             results["locations"] = locs.data
 
@@ -126,6 +126,9 @@ async def load_business_context(business_id: str) -> dict:
 VALID_MEMORY_CATEGORIES = {"owner_info", "business_rule", "client_note", "preference", "instruction", "general"}
 
 async def save_memory_to_db(business_id: str, key: str, value: str, category: str):
+    if not business_id or len(business_id) < 10:
+        logger.warning(f"save_memory skipped — invalid business_id: '{business_id}'")
+        return
     sb = get_supabase()
     if not sb:
         return
@@ -785,6 +788,7 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • Never say "I can't" if you have a tool for it
 • No markdown, no bullet points — natural speech only
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
+• NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
 • Search documents or web before admitting ignorance
 
 GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
@@ -852,6 +856,7 @@ async def entrypoint(ctx: JobContext):
 CRITICAL: You HAVE access to the live data above. When asked about appointments, calls, messages, or status — read directly from the LIVE DASHBOARD DATA section above. 
 NEVER say "I don't have access to that information" or "I don't want to guess" — you have the data, use it.
 NEVER say "I'll have our team follow up" for status questions — answer directly from the data above.
+OWNER NAME RULE: When the owner gives their name, ALWAYS spell it back: "Got it — is that spelled M-A-X?" and wait for confirmation before saving. This prevents mishearing errors. Once confirmed, save with save_memory.
 """
 
     # Onboarding mode — full guided tour script
@@ -1602,7 +1607,13 @@ ONBOARDING RULES:
     _greeting_hint += " One sentence only."
 
     try:
+        try:
         await session.generate_reply(instructions=_greeting_hint)
+    except RuntimeError as e:
+        if "closing" in str(e).lower():
+            logger.info("Session closed before greeting — user disconnected quickly")
+        else:
+            raise
     except RuntimeError as e:
         if "closing" in str(e).lower():
             logger.info("Session closed before greeting — user disconnected quickly")
