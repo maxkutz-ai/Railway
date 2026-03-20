@@ -1762,25 +1762,39 @@ ONBOARDING RULES:
     ctx.room.on("participant_spoke", lambda *_: mark_active())
 
     # Handle text messages typed by user in the chat box
-    async def on_data_received(data: bytes, participant: object, kind: object, topic: str = ""):
-        if topic != "user_text":
-            return
+    async def on_data_received(*args):
+        """Handle text typed in the chat box, sent via LiveKit data channel."""
         try:
             import json as _json
-            evt = _json.loads(data.decode("utf-8"))
+            # LiveKit 1.5 sends a DataPacket object as first arg
+            pkt = args[0] if args else None
+            if pkt is None:
+                return
+            # Extract topic and raw bytes depending on SDK version
+            if hasattr(pkt, 'topic'):
+                topic = pkt.topic or ""
+                raw = bytes(pkt.data) if hasattr(pkt, 'data') else b""
+            elif isinstance(pkt, bytes):
+                # Older signature: (data, participant, kind, topic)
+                raw = pkt
+                topic = args[3] if len(args) > 3 else ""
+            else:
+                return
+            if topic != "user_text":
+                return
+            evt = _json.loads(raw.decode("utf-8"))
             text = evt.get("text", "").strip()
             if not text:
                 return
             mark_active()
             logger.info(f"User typed in chat: {text!r}")
-            # Inject as a user message into the session
             await session.generate_reply(
                 instructions="The owner just typed in the chat: " + repr(text) + ". Treat this exactly as if they said it out loud and respond naturally."
             )
         except Exception as e:
             logger.warning(f"on_data_received error: {e}")
 
-    ctx.room.on("data_received", lambda data, participant, kind, topic="": asyncio.create_task(on_data_received(data, participant, kind, topic)))
+    ctx.room.on("data_received", lambda *args: asyncio.create_task(on_data_received(*args)))
 
     async def keepalive_task():
         """Prevent idle disconnect — only prompt after very long silence."""
