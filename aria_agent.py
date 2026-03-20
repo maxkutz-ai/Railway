@@ -250,16 +250,23 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
             return f"Contact {data.get('name')} saved."
 
         elif action == "update_business_hours":
-            sb.from_("business_settings").upsert({
-                "business_id":    business_id,
-                "business_hours": data.get("hours"),
-                "created_at":     datetime.now().isoformat(),
-            }, on_conflict="business_id").execute()
-            sb.from_("ai_settings").upsert({
-                "business_id":    business_id,
-                "business_hours": data.get("hours"),
-            }, on_conflict="business_id").execute()
-            return "Business hours updated successfully."
+            hours_val = data.get("hours")
+            logger.info(f"Saving business hours for {business_id}: {hours_val}")
+            try:
+                sb.from_("business_settings").upsert({
+                    "business_id":    business_id,
+                    "business_hours": hours_val,
+                }, on_conflict="business_id").execute()
+            except Exception as e1:
+                logger.warning(f"business_settings upsert failed: {e1}")
+            try:
+                sb.from_("ai_settings").upsert({
+                    "business_id":    business_id,
+                    "business_hours": hours_val,
+                }, on_conflict="business_id").execute()
+            except Exception as e2:
+                logger.warning(f"ai_settings upsert failed: {e2}")
+            return f"Got it! Business hours saved: {hours_val}"
 
         elif action == "log_message":
             # Real messages schema: needs contact_id, message_body, channel, direction
@@ -611,6 +618,22 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
 
     mem_text = "\n".join(m[:150] for m in memories[:20]) if memories else "Nothing saved yet."
 
+    # Track video session count (for onboarding)
+    video_count = 0
+    try:
+        sb_vc = get_supabase()
+        if sb_vc and business_id:
+            vc_res = sb_vc.from_("ai_memory").select("memory_value").eq("business_id", business_id).eq("memory_key", "aria_video_count").limit(1).execute()
+            if vc_res.data:
+                video_count = int(vc_res.data[0]["memory_value"] or 0)
+            new_count = video_count + 1
+            sb_vc.from_("ai_memory").upsert({
+                "business_id": business_id, "category": "system",
+                "memory_key": "aria_video_count", "memory_value": str(new_count),
+                "created_at": datetime.now().isoformat()
+            }, on_conflict="business_id,memory_key").execute()
+    except: pass
+
     # Load scanned knowledge (last 5 items, summarized)
     kb_text = ""
     try:
@@ -809,8 +832,17 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
 • Search documents or web before admitting ignorance
+• SUPPORT INFO: If anyone asks about support, help desk, or contacting the team: the support email is support@receptionist.co and the website is receptionist.co. Say this directly without checking.
 
 GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
+
+SESSION #{str(video_count + 1)} WITH THIS BUSINESS.
+{"""FIRST SESSION ONBOARDING: This is the owner's first time speaking with you. After greeting them, introduce yourself warmly and explain what you can help with. Then proactively say:
+1. "I don't have your name yet — what should I call you?" (save it when they tell you)  
+2. "I also don't see your business hours set up yet. Want me to help? I can: scan your website to pull hours automatically, or you can just tell me the days and times right now."
+3. "Do you have a contact number or email I should have on file?"
+Keep it conversational — don't dump all questions at once. Flow naturally.""" if video_count == 0 else ""}
+{"""SECOND SESSION FOLLOW-UP: This is their second session. If business hours or contact info were not set up last time, gently remind them: 'Last time we didn't quite finish setting up your hours or contact info — want to take care of that now?'""" if video_count == 1 else ""}
 """
 
 
