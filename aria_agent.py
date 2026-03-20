@@ -88,11 +88,11 @@ async def load_business_context(business_id: str) -> dict:
         if ai_set.data:
             results["ai_settings"] = ai_set.data
 
-        biz_set = sb.from_("business_settings").select("*").eq("business_id", business_id).single().execute()
+        biz_set = sb.from_("settings_business").select("*").eq("business_id", business_id).single().execute()
         if biz_set.data:
             results["business_settings"] = biz_set.data
 
-        svcs = sb.from_("services").select("name,duration_minutes,price,category").eq("business_id", business_id).eq("is_active", True).execute()
+        svcs = sb.from_("services").select("name,duration_minutes,price,category,description").eq("business_id", business_id).eq("is_active", True).execute()
         if svcs.data:
             results["services"] = svcs.data
 
@@ -104,9 +104,39 @@ async def load_business_context(business_id: str) -> dict:
         if locs.data:
             results["locations"] = locs.data
 
-        mems = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", business_id).order("created_at", desc=True).limit(150).execute()
+        # All memories (facts + conversation history)
+        mems = sb.from_("ai_memory").select("category,memory_key,memory_value,created_at").eq("business_id", business_id).order("created_at", desc=True).limit(150).execute()
         if mems.data:
             results["memories"] = mems.data
+
+        # ── CRM activity snapshot (last 7 days) ──────────────────────────
+        from datetime import timedelta
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+
+        try:
+            appts = sb.from_("appointments").select("start_time,service_type,status,contacts(first_name,last_name)").eq("business_id", business_id).gte("start_time", week_ago).order("start_time", desc=True).limit(10).execute()
+            results["recent_appointments"] = appts.data or []
+        except Exception: results["recent_appointments"] = []
+
+        try:
+            calls = sb.from_("calls").select("started_at,outcome,from_number,contacts(first_name)").eq("business_id", business_id).order("started_at", desc=True).limit(10).execute()
+            results["recent_calls"] = calls.data or []
+        except Exception: results["recent_calls"] = []
+
+        try:
+            msgs = sb.from_("messages").select("sent_at,message_body,direction,contacts(first_name)").eq("business_id", business_id).order("sent_at", desc=True).limit(5).execute()
+            results["recent_messages"] = msgs.data or []
+        except Exception: results["recent_messages"] = []
+
+        try:
+            contacts_count = sb.from_("contacts").select("id", count="exact").eq("business_id", business_id).execute()
+            results["contacts_count"] = contacts_count.count or 0
+        except Exception: results["contacts_count"] = 0
+
+        try:
+            missed = sb.from_("calls").select("id", count="exact").eq("business_id", business_id).eq("outcome", "missed").execute()
+            results["missed_calls_total"] = missed.count or 0
+        except Exception: results["missed_calls_total"] = 0
 
         # Load integrations (Google Drive, Dropbox tokens)
         try:
@@ -403,109 +433,231 @@ async def search_dropbox(access_token: str, query: str, max_results: int = 5) ->
 # ── System prompt ─────────────────────────────────────────────────────────────
 INDUSTRY_SCRIPTS = {
     "spa": {
-        "style": "luxurious, calming, warm — like a 5-star spa concierge",
-        "skills": "booking massages/facials/nails, upselling packages, gift cards, membership sales, pre/post care advice",
-        "urgency": "low — relaxation focused, never rushed",
-        "phrases": ["You deserve this", "Let me check availability for you", "Our therapists specialize in..."],
-        "common_asks": ["book appointment", "prices", "what services", "gift cards", "parking"],
+        "style": "luxurious, calming, warm — like a 5-star spa concierge. Never rushed.",
+        "skills": "booking massages/facials/nails/body treatments, upselling packages, gift cards, membership sales, pre/post care advice, cancellation policy",
+        "urgency": "low — relaxation focused, unhurried energy always",
+        "phrases": ["You deserve this", "Let me check availability for you", "Our therapists specialize in"],
+        "common_asks": ["book appointment", "prices", "what services do you offer", "gift cards", "parking", "cancellation policy"],
+        "setup_checklist": ["business_hours", "services_with_prices", "cancellation_policy", "booking_lead_time", "staff_names", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your hours? For example, Monday through Friday 9 to 6, Saturday 10 to 4."),
+            ("services_with_prices", "What services do you offer? Walk me through them — name, duration, and price if you know it."),
+            ("cancellation_policy", "What's your cancellation policy? Do you charge for late cancellations or no-shows?"),
+            ("booking_lead_time", "How far in advance can clients book? And is there a minimum notice for same-day bookings?"),
+            ("staff_names", "Do you have multiple therapists or estheticians I should know about?"),
+        ],
+        "crm_briefing": "Tell me about missed calls first, then today's bookings. Mention any unread messages.",
+    },
+    "salon": {
+        "style": "trendy, warm, excited about beauty — mirror the client's energy, use their first name",
+        "skills": "booking cuts/color/blowouts, stylist availability, color consultation prompts, retail product recommendations, gift cards, wedding packages",
+        "urgency": "low — style emergencies (wedding tomorrow) = squeeze in if possible",
+        "phrases": ["You're going to love it!", "Let me check their availability", "Do you have a color reference photo?"],
+        "common_asks": ["book haircut", "color appointment", "balayage price", "extensions", "wedding packages"],
+        "setup_checklist": ["business_hours", "services_with_prices", "staff_names", "booking_rules", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your salon hours?"),
+            ("services_with_prices", "What services do you offer? I'll need names and prices — cuts, colors, treatments, anything you have."),
+            ("staff_names", "Who are your stylists? I like to book clients with specific people when they ask."),
+            ("booking_rules", "Do clients book with specific stylists, or whoever's available? Any deposit required?"),
+        ],
+        "crm_briefing": "Missed calls and today's appointments.",
     },
     "medical": {
-        "style": "calm, professional, reassuring — HIPAA aware, never share patient info",
-        "skills": "scheduling appointments, insurance verification prompts, co-pay reminders, referrals, lab results routing (to nurse only), urgent triage",
-        "urgency": "medium-high — chest pain/breathing = call 911 immediately",
-        "phrases": ["I'll have someone call you back shortly", "The doctor will review that", "For your privacy..."],
-        "common_asks": ["schedule appointment", "refill prescription", "test results", "insurance", "urgent care"],
+        "style": "calm, professional, reassuring — HIPAA aware, never share patient info with third parties",
+        "skills": "scheduling appointments, insurance verification prompts, co-pay reminders, referrals, urgent triage, new patient intake",
+        "urgency": "medium-high — chest pain/difficulty breathing = call 911 immediately, always",
+        "phrases": ["I'll have someone call you back shortly", "The doctor will review that", "For your privacy"],
+        "common_asks": ["schedule appointment", "refill prescription", "test results", "insurance accepted", "urgent care vs ER"],
+        "setup_checklist": ["business_hours", "provider_names", "insurance_accepted", "appointment_types", "new_patient_process", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your clinic hours, including any after-hours or on-call availability?"),
+            ("provider_names", "Who are the providers — doctors, NPs, PAs — I should know about?"),
+            ("insurance_accepted", "What insurance plans do you accept? I'll need to mention this to callers."),
+            ("appointment_types", "What types of appointments do you schedule? Annual physicals, sick visits, follow-ups, procedures?"),
+            ("new_patient_process", "What's the process for new patients — do they need a referral, forms to fill out, anything specific?"),
+        ],
+        "crm_briefing": "Any urgent messages or missed calls first, then today's schedule.",
     },
     "dental": {
-        "style": "friendly, reassuring — patients are often anxious, make them feel at ease",
-        "skills": "scheduling cleanings/fillings/emergencies, insurance verification, payment plan info, post-procedure care instructions",
-        "urgency": "medium — dental emergencies (broken tooth, severe pain) = same-day slot",
-        "phrases": ["We'll take great care of you", "Dr. [name] has an opening...", "We accept most insurance plans"],
-        "common_asks": ["book cleaning", "emergency tooth pain", "insurance accepted", "cost of filling", "hours"],
+        "style": "friendly, reassuring — patients are often anxious, make them feel safe and at ease immediately",
+        "skills": "scheduling cleanings/fillings/emergencies/ortho, insurance verification, payment plan info, post-procedure care instructions, emergency triage",
+        "urgency": "medium — dental emergencies (broken tooth, severe pain, swelling) = same-day slot priority",
+        "phrases": ["We'll take great care of you", "Dr. [name] has an opening", "We accept most PPO plans"],
+        "common_asks": ["book cleaning", "emergency tooth pain", "insurance accepted", "cost of filling", "pediatric dentist"],
+        "setup_checklist": ["business_hours", "provider_names", "insurance_accepted", "services_with_prices", "emergency_policy", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your office hours? Any evening or Saturday availability?"),
+            ("provider_names", "Who are the dentists and any specialists I should know about?"),
+            ("insurance_accepted", "What insurance do you accept? PPO, HMO, any specific carriers?"),
+            ("services_with_prices", "What's your new patient exam and cleaning fee for uninsured patients?"),
+            ("emergency_policy", "How do you handle dental emergencies — same-day slots, after-hours line?"),
+        ],
+        "crm_briefing": "Any emergency messages or missed calls first, then today's appointments.",
+    },
+    "hvac": {
+        "style": "efficient, calm under pressure — callers are stressed (no heat/AC), be the steady voice that fixes things",
+        "skills": "emergency triage (no heat in winter = priority 1), scheduling tune-ups/repairs/installations, dispatching techs, ETAs, maintenance plan upsell, seasonal reminders",
+        "urgency": "HIGH — furnace out in winter, AC out in summer = emergency dispatch immediately",
+        "phrases": ["We'll get someone out to you today", "Can you describe what the unit is doing?", "Is anyone vulnerable to the heat or cold?"],
+        "common_asks": ["heater not working", "AC broken", "strange noise from unit", "annual tune-up", "new system quote", "maintenance plan"],
+        "setup_checklist": ["business_hours", "emergency_hours", "service_area", "services_offered", "pricing_model", "dispatch_number", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your regular business hours?"),
+            ("emergency_hours", "Do you offer 24/7 emergency service? What's the emergency dispatch number or process?"),
+            ("service_area", "What zip codes or cities do you service? I'll need to tell callers if you cover their area."),
+            ("services_offered", "What services do you offer — repairs, installs, tune-ups, air quality, duct cleaning?"),
+            ("pricing_model", "How do you charge — flat rate, hourly, diagnostic fee? Anything I should mention upfront?"),
+        ],
+        "crm_briefing": "Any emergency calls or messages first, then today's scheduled jobs.",
+    },
+    "plumber": {
+        "style": "fast, calm, reassuring — burst pipe callers are panicking, be immediate and action-oriented",
+        "skills": "emergency dispatch (burst pipes, flooding = NOW), triage water damage severity, scheduling drain/fixture/water heater jobs, shutoff valve guidance",
+        "urgency": "HIGH — active flooding/burst pipe = emergency dispatch, always tell them to shut off water first",
+        "phrases": ["First — shut off your main water valve", "We have a tech available now", "Can you tell me where the water is coming from?"],
+        "common_asks": ["pipe burst", "drain clogged", "water heater out", "toilet overflow", "leak under sink", "emergency"],
+        "setup_checklist": ["business_hours", "emergency_hours", "service_area", "services_offered", "pricing_model", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your regular hours and emergency availability?"),
+            ("service_area", "What areas do you cover?"),
+            ("services_offered", "What plumbing services do you offer — drains, water heaters, fixtures, repiping, emergencies?"),
+            ("pricing_model", "How do you charge — service call fee, hourly, flat rate per job?"),
+        ],
+        "crm_briefing": "Emergency calls and missed calls first.",
+    },
+    "web_agency": {
+        "style": "creative, knowledgeable, consultative — speak like a smart agency partner, not a salesperson",
+        "skills": "web design consultations, project scoping, quoting timelines/budgets, portfolio sharing, SEO/hosting questions, client onboarding, revision process, maintenance plans",
+        "urgency": "low-medium — new project leads should be captured quickly before they go elsewhere",
+        "phrases": ["We'd love to work on that with you", "Let me get some details so we can put together a proposal", "What's the timeline you're working with?"],
+        "common_asks": ["website redesign", "how much does a website cost", "ecommerce site", "SEO services", "how long does it take", "portfolio examples", "maintenance plan"],
+        "setup_checklist": ["business_hours", "services_with_prices", "portfolio_url", "project_types", "contact_intake_questions", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your business hours for client calls?"),
+            ("services_with_prices", "What services do you offer? Web design, branding, SEO, hosting, maintenance? Any starting price ranges?"),
+            ("project_types", "What types of clients and projects do you specialize in — small business, ecommerce, restaurants, medical?"),
+            ("contact_intake_questions", "When a new lead calls, what do you need to know? Budget, timeline, type of site, existing domain?"),
+            ("portfolio_url", "Do you have a portfolio URL I can direct people to while they wait for a callback?"),
+        ],
+        "crm_briefing": "New leads and missed calls first — every missed call is a potential project.",
     },
     "legal": {
         "style": "formal, discreet, confidential — never discuss case details, always route to attorney",
-        "skills": "scheduling consultations, screening caller needs, message routing, document drop-off coordination",
-        "urgency": "varies — criminal/emergency = urgent callback",
+        "skills": "scheduling consultations, screening caller needs, message routing, document drop-off coordination, intake form guidance",
+        "urgency": "varies — criminal/emergency = urgent callback same day",
         "phrases": ["I'll have an attorney call you back", "We treat all matters with strict confidentiality", "May I ask the general nature of your inquiry?"],
-        "common_asks": ["free consultation", "how much does it cost", "immigration", "divorce", "criminal defense"],
-    },
-    "hvac": {
-        "style": "efficient, calm under pressure — many callers are stressed (no heat/AC)",
-        "skills": "emergency triage (no heat in winter = priority 1), scheduling tune-ups/repairs/installations, dispatching techs, ETAs, maintenance plan upsell",
-        "urgency": "HIGH — furnace out in winter, AC out in summer = emergency dispatch",
-        "phrases": ["We'll get someone out to you today", "Can you describe what the unit is doing?", "Is anyone in the home vulnerable to the heat/cold?"],
-        "common_asks": ["heater not working", "AC broken", "strange noise", "annual tune-up", "new system quote"],
-    },
-    "plumber": {
-        "style": "fast, calm, reassuring — burst pipe callers are panicking",
-        "skills": "emergency dispatch (burst pipes, flooding = NOW), scheduling drain/fixture/water heater jobs, triage water damage severity",
-        "urgency": "HIGH — active flooding/burst pipe = emergency dispatch, shut off water first",
-        "phrases": ["First — shut off your main water valve", "We have an emergency tech available", "Can you tell me where the water is coming from?"],
-        "common_asks": ["pipe burst", "drain clogged", "water heater", "toilet overflow", "leak under sink"],
-    },
-    "electrician": {
-        "style": "safety-first, clear, professional — electrical hazards need immediate triage",
-        "skills": "safety triage (sparks/burning smell = evacuate), scheduling panel upgrades/EV chargers/lighting, emergency outage response",
-        "urgency": "HIGH — sparks, burning smell, no power = safety emergency",
-        "phrases": ["If you see sparks or smell burning — leave the building and call 911", "I'm dispatching our on-call electrician", "Can you safely reach the breaker panel?"],
-        "common_asks": ["power outage", "breaker keeps tripping", "EV charger install", "panel upgrade", "outdoor lighting"],
-    },
-    "locksmith": {
-        "style": "fast, empathetic — lockouts are stressful, often at night or in bad weather",
-        "skills": "lockout dispatch (home/car/business), rekeying quotes, lock upgrade upsell, safe service",
-        "urgency": "HIGH — stranded lockouts = immediate dispatch, especially at night",
-        "phrases": ["We can have someone there in about 30 minutes", "Are you in a safe location?", "What type of lock/vehicle is it?"],
-        "common_asks": ["locked out of house", "car lockout", "lost keys", "rekey locks", "broken key"],
+        "common_asks": ["free consultation", "how much does it cost", "immigration case", "divorce", "criminal defense", "personal injury"],
+        "setup_checklist": ["business_hours", "practice_areas", "consultation_fee", "attorney_names", "intake_questions", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your office hours for client calls?"),
+            ("practice_areas", "What areas of law do you practice? I'll need to route callers to the right area."),
+            ("consultation_fee", "Do you offer free consultations, or is there a fee?"),
+            ("attorney_names", "Who are the attorneys I should know about?"),
+            ("intake_questions", "What do you need to know from a new caller — case type, urgency, location?"),
+        ],
+        "crm_briefing": "Urgent messages and missed calls first, then today's consultations.",
     },
     "hotel": {
-        "style": "elegant, welcoming, concierge-level service — every guest is a VIP",
-        "skills": "reservations, check-in/out info, amenity questions, local recommendations, complaint handling, room requests",
-        "urgency": "low-medium — complaints and room issues = prompt gracious response",
+        "style": "elegant, welcoming, concierge-level — every guest is a VIP, never say no, find an alternative",
+        "skills": "reservations, check-in/out info, amenity questions, local recommendations, complaint handling, room requests, group bookings",
+        "urgency": "low-medium — complaints and urgent room issues = prompt gracious response",
         "phrases": ["It would be our pleasure", "Allow me to assist you with that", "Your comfort is our top priority"],
-        "common_asks": ["room availability", "check-in time", "parking", "restaurant recommendations", "pool hours"],
-    },
-    "salon": {
-        "style": "trendy, warm, excited about beauty — mirror the client's energy",
-        "skills": "booking cuts/color/blowouts, stylist availability, color consultation prompts, retail product recommendations, gift cards",
-        "urgency": "low — style emergencies (wedding tomorrow) = squeeze in if possible",
-        "phrases": ["You're going to love it!", "Let me check [stylist]'s availability", "Do you have a color reference photo?"],
-        "common_asks": ["book haircut", "color appointment", "balayage price", "extensions", "wedding packages"],
-    },
-    "gym": {
-        "style": "energetic, motivating, encouraging — match the fitness vibe",
-        "skills": "membership sign-ups, class booking, personal trainer scheduling, guest passes, cancellation policy",
-        "urgency": "low — motivate hesitant leads to come in for a free trial",
-        "phrases": ["Let's get you started!", "We have a free trial offer", "What are your fitness goals?"],
-        "common_asks": ["membership price", "class schedule", "personal trainer", "cancel membership", "guest pass"],
-    },
-    "auto": {
-        "style": "knowledgeable, trustworthy — car owners worry about being overcharged",
-        "skills": "service scheduling (oil change/brakes/tires), estimate requests, loaner car availability, pickup/drop-off service",
-        "urgency": "medium — brake/safety issues = priority",
-        "phrases": ["We can get you in tomorrow morning", "We'll do a complimentary inspection", "Our technicians are ASE certified"],
-        "common_asks": ["oil change appointment", "brake noise", "check engine light", "tire rotation", "estimate"],
-    },
-    "corporate": {
-        "style": "polished, efficient, professional — executive-level interactions",
-        "skills": "visitor check-in, meeting room booking, call routing to correct department, package handling, vendor management",
-        "urgency": "low — professionalism is the priority",
-        "phrases": ["I'll let them know you've arrived", "May I ask who's calling?", "I'll transfer you now"],
-        "common_asks": ["meeting room", "visitor badge", "transfer to department", "CEO/manager", "parking validation"],
+        "common_asks": ["room availability", "check-in time", "parking", "restaurant nearby", "pool hours", "early check-in"],
+        "setup_checklist": ["check_in_out_times", "room_types", "amenities", "cancellation_policy", "local_recommendations", "website_scan"],
+        "setup_questions": [
+            ("check_in_out_times", "What are your check-in and check-out times? Any early check-in policy?"),
+            ("room_types", "What room types do you offer? Suite, king, double, any special rooms?"),
+            ("amenities", "What amenities do you have — pool, gym, restaurant, spa, parking?"),
+            ("cancellation_policy", "What's your cancellation policy?"),
+        ],
+        "crm_briefing": "Any guest complaints or urgent messages first, then today's arrivals.",
     },
     "veterinary": {
-        "style": "warm, caring — pets are family, owners are emotionally invested",
-        "skills": "appointment booking, wellness/vaccine scheduling, urgent triage (vomiting/not eating/trauma = same day), prescription refills routing",
-        "urgency": "HIGH for emergencies — not breathing, trauma, seizure = emergency hospital referral",
-        "phrases": ["We'll take great care of [pet name]", "Can you describe the symptoms?", "Is [pet name] eating and drinking normally?"],
-        "common_asks": ["annual checkup", "vaccines", "my dog is sick", "prescription refill", "emergency"],
+        "style": "warm, caring, empathetic — pets are family, match the owner's concern level",
+        "skills": "appointment booking, wellness/vaccine scheduling, urgent triage (not eating/vomiting/trauma = same day), prescription refills routing, boarding inquiries",
+        "urgency": "HIGH for emergencies — not breathing, trauma, seizure = emergency animal hospital referral immediately",
+        "phrases": ["We'll take great care of them", "Can you describe the symptoms?", "Is your pet eating and drinking normally?"],
+        "common_asks": ["annual checkup", "vaccines due", "my dog is sick", "prescription refill", "emergency", "boarding"],
+        "setup_checklist": ["business_hours", "emergency_protocol", "services_offered", "provider_names", "species_treated", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your clinic hours? Do you have after-hours emergency coverage?"),
+            ("emergency_protocol", "For after-hours emergencies, where do you refer clients?"),
+            ("species_treated", "Do you treat dogs and cats only, or other animals too?"),
+            ("services_offered", "What services do you offer — wellness exams, surgery, dental, boarding, grooming?"),
+        ],
+        "crm_briefing": "Any urgent or sick-pet messages first, then today's appointments.",
+    },
+    "gym": {
+        "style": "energetic, motivating, encouraging — match the fitness vibe, be a hype person",
+        "skills": "membership sign-ups, class booking, personal trainer scheduling, guest passes, cancellation policy, corporate accounts",
+        "urgency": "low — motivate hesitant leads to come in for a free trial",
+        "phrases": ["Let's get you started!", "We have a free trial available", "What are your fitness goals?"],
+        "common_asks": ["membership price", "class schedule", "personal trainer", "cancel membership", "guest pass", "free trial"],
+        "setup_checklist": ["business_hours", "membership_types", "class_schedule", "services_offered", "cancellation_policy", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your gym hours?"),
+            ("membership_types", "What membership options do you offer and at what price points?"),
+            ("class_schedule", "Do you have group fitness classes? What types and how do people sign up?"),
+            ("services_offered", "Any personal training, nutrition coaching, or other add-ons?"),
+        ],
+        "crm_briefing": "New member inquiries and missed calls first.",
+    },
+    "auto": {
+        "style": "knowledgeable, trustworthy — car owners worry about being overcharged, be transparent",
+        "skills": "service scheduling (oil change/brakes/tires), estimate requests, loaner car availability, pickup/drop-off service, warranty questions",
+        "urgency": "medium — brake/safety issues = priority same-day",
+        "phrases": ["We can get you in tomorrow morning", "We'll do a complimentary inspection", "Our technicians are ASE certified"],
+        "common_asks": ["oil change", "brake noise", "check engine light", "tire rotation", "estimate", "loaner car"],
+        "setup_checklist": ["business_hours", "services_offered", "makes_serviced", "pricing_model", "loaner_availability", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your shop hours?"),
+            ("services_offered", "What services do you offer — oil changes, brakes, tires, diagnostics, transmission?"),
+            ("makes_serviced", "Do you specialize in certain makes, or service all vehicles?"),
+            ("pricing_model", "Any standard pricing I should know — oil change price, diagnostic fee?"),
+        ],
+        "crm_briefing": "Today's scheduled jobs and any urgent messages.",
+    },
+    "electrician": {
+        "style": "safety-first, clear, professional — electrical hazards need immediate calm triage",
+        "skills": "safety triage (sparks/burning smell = evacuate now), scheduling panel upgrades/EV chargers/lighting, emergency outage response",
+        "urgency": "HIGH — sparks, burning smell, no power = safety emergency, evacuate first",
+        "phrases": ["If you see sparks or smell burning — leave the building now and call 911", "I'm dispatching our on-call electrician", "Can you safely reach the breaker panel?"],
+        "common_asks": ["power outage", "breaker keeps tripping", "EV charger install", "panel upgrade", "outdoor lighting"],
+        "setup_checklist": ["business_hours", "emergency_hours", "service_area", "services_offered", "pricing_model", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your regular hours and emergency availability?"),
+            ("service_area", "What areas do you cover?"),
+            ("services_offered", "What electrical services do you offer?"),
+        ],
+        "crm_briefing": "Emergency calls and missed calls first.",
+    },
+    "corporate": {
+        "style": "polished, efficient, professional — executive-level interactions at all times",
+        "skills": "visitor check-in, meeting room booking, call routing to correct department, package handling, vendor management",
+        "urgency": "low — professionalism is always the priority",
+        "phrases": ["I'll let them know you've arrived", "May I ask who's calling?", "I'll transfer you now"],
+        "common_asks": ["meeting room", "visitor arrival", "transfer to department", "executive team", "parking validation"],
+        "setup_checklist": ["business_hours", "departments_and_extensions", "visitor_process", "meeting_rooms", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your office hours?"),
+            ("departments_and_extensions", "What departments and key contacts should I know how to route calls to?"),
+            ("visitor_process", "What's the visitor check-in process?"),
+        ],
+        "crm_briefing": "Today's scheduled meetings and visitor arrivals.",
     },
     "appointment": {  # generic fallback
         "style": "warm, professional, helpful",
         "skills": "scheduling appointments, answering service questions, taking messages",
         "urgency": "medium",
-        "phrases": ["Let me check availability", "I'd be happy to help", "Is there anything else I can assist with?"],
-        "common_asks": ["book appointment", "pricing", "hours", "location", "cancel/reschedule"],
+        "phrases": ["Let me check availability", "I'd be happy to help", "I'll make a note of that"],
+        "common_asks": ["book appointment", "pricing", "hours", "location", "cancel or reschedule"],
+        "setup_checklist": ["business_hours", "services_with_prices", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your business hours?"),
+            ("services_with_prices", "What services do you offer and at what prices?"),
+        ],
+        "crm_briefing": "Missed calls and today's appointments.",
     },
     "trade": {  # generic trade fallback
         "style": "efficient, professional, calm under pressure",
@@ -513,38 +665,166 @@ INDUSTRY_SCRIPTS = {
         "urgency": "HIGH — many calls are urgent",
         "phrases": ["We can have someone out to you", "Can you describe the issue?", "Is this an emergency?"],
         "common_asks": ["emergency service", "schedule repair", "pricing", "availability", "ETA"],
+        "setup_checklist": ["business_hours", "emergency_hours", "service_area", "services_offered", "website_scan"],
+        "setup_questions": [
+            ("business_hours", "What are your hours including emergency availability?"),
+            ("service_area", "What areas do you cover?"),
+            ("services_offered", "What services do you offer?"),
+        ],
+        "crm_briefing": "Emergency calls and missed calls first.",
     },
 }
 
 def detect_industry(biz_ctx: dict) -> str:
     """Detect business industry from context."""
-    biz     = biz_ctx.get("business", {})
-    cfg     = biz_ctx.get("config", {})
-    industry= (biz.get("industry") or cfg.get("business_type") or "").lower()
-    name    = (biz.get("name") or "").lower()
-    vertical= (biz.get("vertical") or "appointment").lower()
+    biz      = biz_ctx.get("business", {})
+    cfg      = biz_ctx.get("config", {})
+    industry = (biz.get("industry") or cfg.get("business_type") or "").lower()
+    name     = (biz.get("name") or "").lower()
+    vertical = (biz.get("vertical") or "appointment").lower()
 
     mapping = [
-        (["spa", "massage", "facial", "wellness", "beauty", "nail"],         "spa"),
-        (["salon", "hair", "barber", "stylist", "blowout"],                   "salon"),
-        (["medical", "clinic", "doctor", "physician", "urgent care"],         "medical"),
-        (["dental", "dentist", "orthodont"],                                   "dental"),
-        (["veterinary", "vet ", "animal", "pet"],                             "veterinary"),
-        (["legal", "law firm", "attorney", "lawyer"],                         "legal"),
-        (["hvac", "heating", "cooling", "air condition", "furnace"],          "hvac"),
-        (["plumb", "pipe", "drain", "water heater"],                          "plumber"),
-        (["electric", "electrician", "wiring", "panel"],                      "electrician"),
-        (["locksmith", "lock ", "lockout", "key"],                            "locksmith"),
-        (["hotel", "motel", "resort", "inn", "lodge"],                        "hotel"),
-        (["gym", "fitness", "crossfit", "yoga", "pilates"],                   "gym"),
-        (["auto", "car", "vehicle", "mechanic", "repair shop", "dealership"], "auto"),
-        (["corporate", "office", "agency", "consulting", "marketing"],        "corporate"),
+        (["spa", "massage", "facial", "wellness", "beauty", "nail"],                    "spa"),
+        (["salon", "hair", "barber", "stylist", "blowout"],                              "salon"),
+        (["medical", "clinic", "doctor", "physician", "urgent care", "family health"],   "medical"),
+        (["dental", "dentist", "orthodont"],                                              "dental"),
+        (["veterinary", "vet ", "animal", "pet"],                                        "veterinary"),
+        (["legal", "law firm", "attorney", "lawyer"],                                    "legal"),
+        (["hvac", "heating", "cooling", "air condition", "furnace"],                     "hvac"),
+        (["plumb", "pipe", "drain", "water heater"],                                     "plumber"),
+        (["electric", "electrician", "wiring", "panel"],                                 "electrician"),
+        (["locksmith", "lock ", "lockout", "key"],                                       "locksmith"),
+        (["hotel", "motel", "resort", "inn", "lodge"],                                   "hotel"),
+        (["gym", "fitness", "crossfit", "yoga", "pilates"],                              "gym"),
+        (["auto", "car", "vehicle", "mechanic", "repair shop", "dealership"],            "auto"),
+        (["web design", "web agency", "website", "digital agency", "officeart",
+          "seo agency", "marketing agency", "branding", "graphic design"],               "web_agency"),
+        (["corporate", "office", "agency", "consulting", "coworking"],                   "corporate"),
     ]
     for keywords, industry_key in mapping:
         if any(k in industry or k in name for k in keywords):
             return industry_key
 
     return vertical if vertical in INDUSTRY_SCRIPTS else "appointment"
+
+
+def _build_session_block(biz_ctx: dict, video_count: int, industry_key: str, industry_script: dict, svcs: list, hours_text: str) -> str:
+    """Build the session-aware intelligence block injected into every prompt."""
+    checklist    = industry_script.get("setup_checklist", [])
+    setup_qs     = industry_script.get("setup_questions", [])
+    crm_briefing = industry_script.get("crm_briefing", "Missed calls and today's appointments.")
+
+    # ── Determine what's set up vs missing ───────────────────────────────────
+    memories = biz_ctx.get("memories", [])
+    mem_keys = {m["memory_key"] for m in memories}
+
+    has_hours    = bool(hours_text.strip())
+    has_services = len(svcs) > 0
+    has_website  = any("website_url" in k or "last_scan" in k for k in mem_keys)
+    has_staff    = len(biz_ctx.get("staff", [])) > 0
+
+    missing = []
+    for item in checklist:
+        if item == "business_hours"         and not has_hours:    missing.append("business hours")
+        elif item == "services_with_prices" and not has_services: missing.append("services and prices")
+        elif item == "website_scan"         and not has_website:  missing.append("website scan")
+        elif item == "staff_names"          and not has_staff:    missing.append("staff names")
+        elif item not in ("business_hours","services_with_prices","website_scan","staff_names"):
+            if not any(item.replace("_"," ") in k.replace("_"," ") for k in mem_keys):
+                missing.append(item.replace("_", " "))
+    missing = missing[:4]
+
+    done = [c.replace("_"," ") for c in checklist if c.replace("_"," ") not in missing]
+
+    # ── CRM activity summary ──────────────────────────────────────────────────
+    recent_appts = biz_ctx.get("recent_appointments", [])
+    recent_calls = biz_ctx.get("recent_calls", [])
+    recent_msgs  = biz_ctx.get("recent_messages", [])
+    contacts_ct  = biz_ctx.get("contacts_count", 0)
+    missed_total = biz_ctx.get("missed_calls_total", 0)
+
+    today_appts = []
+    for a in recent_appts:
+        try:
+            if datetime.fromisoformat(a.get("start_time","")).date() == datetime.now().date():
+                c    = a.get("contacts") or {}
+                name = f"{c.get('first_name','')} {c.get('last_name','')}".strip() or "Client"
+                t    = datetime.fromisoformat(a["start_time"]).strftime("%-I:%M %p")
+                today_appts.append(f"{name} at {t} ({a.get('service_type','appointment')})")
+        except Exception:
+            pass
+
+    missed_today = [c for c in recent_calls if c.get("outcome") == "missed"]
+    missed_names = []
+    for c in missed_today[:3]:
+        con = c.get("contacts") or {}
+        missed_names.append(con.get("first_name") or c.get("from_number") or "Unknown")
+
+    unread_msgs = [m for m in recent_msgs if m.get("direction") == "inbound"]
+
+    crm_lines = []
+    if today_appts:
+        crm_lines.append(f"Today's appointments ({len(today_appts)}): " + " | ".join(today_appts[:4]))
+    if missed_names:
+        crm_lines.append(f"Missed calls today: {', '.join(missed_names)}")
+    if missed_total > 0:
+        crm_lines.append(f"Total missed calls in system: {missed_total}")
+    if unread_msgs:
+        crm_lines.append(f"Unread messages: {len(unread_msgs)}")
+    if contacts_ct:
+        crm_lines.append(f"Total contacts in CRM: {contacts_ct}")
+
+    # ── Last conversation summaries ───────────────────────────────────────────
+    conv_memories  = [m for m in memories if m.get("category") == "conversation"]
+    conv_summaries = [m["memory_value"][:300] for m in conv_memories[:2]]
+
+    # ── Build block based on session number ───────────────────────────────────
+    lines = []
+
+    if video_count == 0:
+        # ── SESSION 1 — First ever session ────────────────────────────────────
+        lines.append("THIS IS THE FIRST SESSION. Work through this flow:")
+        lines.append("1. Greet warmly. Ask their name. Spell it back. Save with save_memory(key='owner_first_name', category='owner_info').")
+        lines.append("2. Ask: 'What kind of business do you run?' Save with save_memory(key='business_type_description', category='business_rule').")
+        lines.append(f"3. Say: 'I'm configured for {industry_key.replace('_',' ')} businesses — let me ask a few quick questions so I can help your clients effectively.'")
+        lines.append("4. Work through these setup questions ONE AT A TIME — ask, wait for full answer, save, then move to next:")
+        for i, (key, question) in enumerate(setup_qs[:3], 1):
+            lines.append(f"   Q{i}: \"{question}\" → save_memory(key='{key}', category='business_rule')")
+        lines.append("5. After setup questions, offer website scan: 'Do you have a website? I can scan it to learn your services and hours automatically.' If yes → call request_website_url(). If no → skip.")
+        lines.append("6. Offer dashboard tour: 'Want me to walk you through the main sections of your dashboard?'")
+        lines.append("CRITICAL: ONE question at a time. Wait for full answer before asking the next one.")
+
+    elif video_count in (1, 2):
+        # ── SESSION 2-3 — Follow-up, give briefing + fill gaps ────────────────
+        lines.append(f"SESSION {video_count + 1} — returning owner. Start with a brief status update, then offer to fill gaps.")
+        if conv_summaries:
+            lines.append(f"LAST SESSION SUMMARY: {conv_summaries[0]}")
+        if crm_lines:
+            lines.append("CRM STATUS RIGHT NOW:")
+            lines.extend(f"  • {l}" for l in crm_lines)
+        if missing:
+            lines.append(f"SETUP STILL MISSING: {', '.join(missing)}")
+            lines.append("SCRIPT: After the status briefing, say: 'A couple of things I'd love to finish setting up — [mention 1 or 2 missing items]. Want to do that now, or is there something else on your mind first?'")
+            lines.append("If yes → use add_service() for services, scan_website() for website scan, or save_memory() for hours and policies. One item at a time.")
+            lines.append("If no → help with what they need. Offer setup at natural pause.")
+        else:
+            lines.append("SETUP IS COMPLETE. Focus on operational help — bookings, calls, CRM questions.")
+        if done:
+            lines.append(f"ALREADY CONFIGURED: {', '.join(done)}")
+
+    else:
+        # ── SESSION 4+ — Established, lead with briefing ──────────────────────
+        lines.append(f"SESSION {video_count + 1} — established relationship. Open with a 1-sentence briefing, then ask what they need.")
+        if conv_summaries:
+            lines.append(f"RECENT CONTEXT: {conv_summaries[0]}")
+        if crm_lines:
+            lines.append(f"BRIEFING TO OPEN WITH ({crm_briefing}):")
+            lines.extend(f"  • {l}" for l in crm_lines)
+            lines.append("Pick the most important item above and lead with it naturally. Example: 'You have 3 missed calls today including one from Sarah — want me to follow up?'")
+        if missing:
+            lines.append(f"Still unconfigured: {', '.join(missing)} — mention only if it comes up naturally.")
+
+    return "\n".join(lines)
 
 
 def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
@@ -868,15 +1148,10 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
 
 SESSION #{str(video_count + 1)} WITH THIS BUSINESS.
-{"""FIRST SESSION — ONBOARDING FLOW:
-1. Ask their name. Spell it back ("Is that M-A-X?"). Wait for yes. Save with save_memory(key="owner_first_name", value=name, category="owner_info").
-2. Say: "Great to meet you, [name]! I'm going to give you a quick tour of your dashboard. Ready?"
-3. When they say yes: call navigate_to_section("dashboard") immediately. Then describe the Dashboard in 2 sentences. Ask "Any questions?" then call complete_onboarding_chapter(0).
-4. Continue tour: Contacts → navigate_to_section("contacts"), Appointments → navigate_to_section("appointments"), Inbox → navigate_to_section("messages"), Calls → navigate_to_section("calls").
-5. End with Settings: call navigate_to_section("settings"). Ask if they want to scan their website.
-6. CRITICAL: After the owner says "yes" to starting the tour, IMMEDIATELY start the tour — do NOT say "I encountered a hiccup" or ask unrelated questions. Just navigate and describe.
-""" if video_count == 0 else ""}
-{"""SECOND SESSION: If hours/services/contact not set up, offer to do it now. Ask what they'd like help with first.""" if video_count == 1 else ""}
+
+━━━ SESSION INTELLIGENCE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{_build_session_block(biz_ctx, video_count, industry_key, industry_script, svcs, hours_text)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 
@@ -1078,6 +1353,49 @@ ONBOARDING RULES:
         except Exception as e:
             logger.warning(f"complete_onboarding_chapter error: {e}")
             return "Chapter progress noted."
+
+    @function_tool
+    async def add_service(ctx: RunContext, name: str, price: float = 0, duration_minutes: int = 60, category: str = "", description: str = "") -> str:
+        """Add a service to this business's service menu in the CRM.
+        Use this when the owner tells you about a service they offer.
+        Call once per service — do not batch multiple services in one call.
+        After saving, confirm: "Got it — [name] added to your services."
+        """
+        try:
+            sb = get_supabase()
+            if not sb or not business_id:
+                return "Session error — please try again."
+
+            # Check for duplicate
+            existing = sb.from_("services").select("id,name").eq("business_id", business_id).ilike("name", name.strip()).execute()
+            if existing.data:
+                return f"'{name}' is already in your services menu."
+
+            sb.from_("services").insert({
+                "business_id":      business_id,
+                "name":             name.strip(),
+                "price":            float(price) if price else None,
+                "duration_minutes": int(duration_minutes) if duration_minutes else None,
+                "category":         category.strip() or None,
+                "description":      description.strip() or None,
+                "is_active":        True,
+            }).execute()
+
+            # Also save to ai_memory so Aria can reference it in future sessions
+            await save_memory_to_db(
+                business_id,
+                f"service_{name.lower().replace(' ','_')}",
+                f"{name}" + (f" — ${price}" if price else "") + (f", {duration_minutes} min" if duration_minutes else "") + (f". {description}" if description else ""),
+                "business_rule"
+            )
+
+            logger.info(f"Service added: {name} for {business_id}")
+            price_str = f" at ${price:.0f}" if price else ""
+            return f"'{name}'{price_str} added to your services menu."
+
+        except Exception as e:
+            logger.error(f"add_service error: {e}")
+            return f"Couldn't save that service: {e}"
 
     @function_tool
     async def request_website_url(ctx: RunContext) -> str:
@@ -1888,6 +2206,38 @@ ONBOARDING RULES:
                 logger.debug(f"keepalive tick: {e}")
 
     asyncio.create_task(keepalive_task())
+
+    # ── Save conversation summary when session ends ────────────────────────
+    async def save_conversation_summary():
+        """Called when participant disconnects — saves what was covered this session."""
+        try:
+            # Ask the LLM to summarise the session in one sentence
+            summary_prompt = (
+                "In one sentence (max 30 words), summarise what was accomplished or discussed "
+                "in this session. Focus on concrete actions taken or topics covered. "
+                "Example: 'Set up business hours and 5 services; owner asked about missed calls.'"
+            )
+            summary_reply = await session.generate_reply(
+                instructions=summary_prompt,
+                allow_interruptions=False,
+            )
+            summary_text = str(summary_reply)[:400] if summary_reply else "Session completed."
+        except Exception:
+            summary_text = f"Session {video_count + 1} completed on {datetime.now().strftime('%b %-d, %Y')}."
+
+        await save_memory_to_db(
+            business_id,
+            f"conversation_session_{video_count + 1}",
+            summary_text,
+            "conversation",
+        )
+        logger.info(f"Session summary saved for session {video_count + 1}: {summary_text[:80]}")
+
+    def on_participant_disconnected(participant: any):
+        if hasattr(participant, "identity") and participant.identity != "aria-agent":
+            asyncio.create_task(save_conversation_summary())
+
+    ctx.room.on("participant_disconnected", on_participant_disconnected)
 
     # ai_name from config (safe fallback)
     _ai_name = (biz_ctx.get("config") or {}).get("ai_name") or "Aria"
