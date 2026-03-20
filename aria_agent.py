@@ -770,6 +770,24 @@ Actions needing confirmation:
 📊 USAGE: The dashboard shows their video minute usage and subscription status.
 🔔 ALERTS: Smart alerts appear in the dashboard for missed calls and important events.
 
+━━━ SERVICES & SETTINGS (CRITICAL — READ CAREFULLY) ━━━━━━━━
+• Services are managed in the CRM: Settings → AI Receptionist → Services tab.
+  - The owner can add, edit, or remove services directly in the dashboard.
+  - If they ask "how do I add services?" → say: "Go to Settings in the left sidebar, then the AI Receptionist tab — you can add your services there."
+  - NEVER suggest Google Drive or Dropbox for managing services. Drive/Dropbox is ONLY for searching uploaded documents like price lists or menus.
+• Business hours → Settings → AI Receptionist → Business Hours tab.
+• Contact info (phone, email) → Settings → Business tab.
+• Google Drive / Dropbox is ONLY for searching documents the owner has uploaded there. It does NOT manage services, contacts, or CRM data.
+• If you can't find something in the dashboard data, say what you DO know and offer to help add it.
+
+━━━ NAVIGATION — HOW TO GUIDE THE OWNER ━━━━━━━━━━━━━━━━━━
+When you need to send the owner to a section, call navigate_to_section(section).
+If they ask how to do something in the dashboard, give SPECIFIC directions:
+  - "Go to Settings in the left sidebar" (not "go to settings section")
+  - "Click Contacts in the left menu, then click a contact name"
+  - "In Appointments, use the Day/Week/Month tabs at the top"
+NEVER say "I'll take you there now" then do nothing. Always call navigate_to_section immediately when you intend to navigate.
+
 ━━━ WHAT A GREAT RECEPTIONIST DOES ━━━━━
 📅 SCHEDULE: book, reschedule, cancel appointments
 👤 CRM: create contacts, look up client history
@@ -850,8 +868,15 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
 
 SESSION #{str(video_count + 1)} WITH THIS BUSINESS.
-{"""FIRST SESSION: Ask name, then offer to set up hours (scan website OR dictate OR type in chat), then ask for contact info. One question at a time.""" if video_count == 0 else ""}
-{"""SECOND SESSION: If hours/contact not set up last time, offer to do it now.""" if video_count == 1 else ""}
+{"""FIRST SESSION — ONBOARDING FLOW:
+1. Ask their name. Spell it back ("Is that M-A-X?"). Wait for yes. Save with save_memory(key="owner_first_name", value=name, category="owner_info").
+2. Say: "Great to meet you, [name]! I'm going to give you a quick tour of your dashboard. Ready?"
+3. When they say yes: call navigate_to_section("dashboard") immediately. Then describe the Dashboard in 2 sentences. Ask "Any questions?" then call complete_onboarding_chapter(0).
+4. Continue tour: Contacts → navigate_to_section("contacts"), Appointments → navigate_to_section("appointments"), Inbox → navigate_to_section("messages"), Calls → navigate_to_section("calls").
+5. End with Settings: call navigate_to_section("settings"). Ask if they want to scan their website.
+6. CRITICAL: After the owner says "yes" to starting the tour, IMMEDIATELY start the tour — do NOT say "I encountered a hiccup" or ask unrelated questions. Just navigate and describe.
+""" if video_count == 0 else ""}
+{"""SECOND SESSION: If hours/services/contact not set up, offer to do it now. Ask what they'd like help with first.""" if video_count == 1 else ""}
 """
 
 
@@ -1008,17 +1033,29 @@ ONBOARDING RULES:
         valid = ["dashboard","contacts","appointments","messages","calls","pipeline","analytics","campaigns","settings"]
         if section not in valid:
             return f"Unknown section: {section}. Valid: {', '.join(valid)}"
-        # Signal via memory that we want to navigate
+
+        # PRIMARY: publish via LiveKit data channel for instant response
+        try:
+            import json as _json
+            payload = _json.dumps({"type": "navigate", "section": section}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"Navigation published via LiveKit: {section}")
+        except Exception as e:
+            logger.warning(f"LiveKit navigation publish failed: {e}")
+
+        # FALLBACK: write to Supabase for polling-based pickup
         try:
             sb = get_supabase()
-            if sb:
-                await sb.table("ai_memory").upsert({
+            if sb and business_id:
+                sb.from_("ai_memory").upsert({
                     "business_id": business_id,
                     "memory_key":  "aria_navigate_request",
                     "memory_value": section,
                     "category":    "preference",
                 }, on_conflict="business_id,memory_key").execute()
-        except: pass
+        except Exception as e:
+            logger.warning(f"Supabase navigate fallback failed: {e}")
+
         return f"Navigating to {section} section."
 
     @function_tool
@@ -1029,14 +1066,18 @@ ONBOARDING RULES:
         """
         try:
             sb = get_supabase()
-            if sb:
-                await sb.table("onboarding_sessions").update({
+            if sb and business_id:
+                # upsert so it works even if no onboarding_sessions row exists yet
+                sb.from_("onboarding_sessions").upsert({
+                    "business_id":    business_id,
                     "current_chapter": chapter + 1,
+                    "status":         "in_progress",
                     "last_active_at": datetime.utcnow().isoformat(),
-                }).eq("business_id", business_id).execute()
+                }, on_conflict="business_id").execute()
             return f"Chapter {chapter} complete. Moving to chapter {chapter + 1}."
         except Exception as e:
-            return f"Chapter progress noted."
+            logger.warning(f"complete_onboarding_chapter error: {e}")
+            return "Chapter progress noted."
 
     @function_tool
     async def request_website_url(ctx: RunContext) -> str:
@@ -1071,87 +1112,112 @@ ONBOARDING RULES:
         try:
             import httpx, json as _json, re as _re
             app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.receptionist.co")
+
+            # Normalise URL — lowercase scheme, ensure https://
+            website_url = website_url.strip()
+            if not website_url.startswith("http"):
+                website_url = "https://" + website_url
+            # Fix common capitalisation issue (e.g. https://Southamptonspa.com)
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(website_url)
+            website_url = urlunparse(parsed._replace(netloc=parsed.netloc.lower()))
+
             sb = get_supabase()
             if sb and business_id:
                 try:
-                    sb.table("settings_business").update({"website_url": website_url}).eq("business_id", business_id).execute()
-                except: pass
+                    sb.from_("settings_business").upsert(
+                        {"business_id": business_id, "website_url": website_url},
+                        on_conflict="business_id"
+                    ).execute()
+                except Exception as e:
+                    logger.warning(f"website_url save failed: {e}")
                 try:
-                    sb.table("ai_memory").delete().eq("business_id", business_id).eq("category", "website_content").execute()
+                    sb.from_("ai_memory").delete().eq("business_id", business_id).eq("category", "website_content").execute()
                 except: pass
 
-            async with httpx.AsyncClient(timeout=45) as client:
-                resp = await client.post(
-                    f"{app_url}/api/knowledge/ingest",
-                    json={"business_id": business_id, "type": "url", "url": website_url},
-                )
-                data = resp.json()
-                if not data.get("ok"):
-                    return f"I had trouble scanning that website: {data.get('error', 'unknown error')}. Please check the URL is correct and try again."
+            # Call ingest API — generous timeout
+            try:
+                async with httpx.AsyncClient(timeout=50) as client:
+                    resp = await client.post(
+                        f"{app_url}/api/knowledge/ingest",
+                        json={"business_id": business_id, "type": "url", "url": website_url},
+                    )
+                    if not resp.is_success:
+                        return (f"I tried to scan {website_url} but the server returned an error ({resp.status_code}). "
+                                "Please check the URL is publicly accessible and try again.")
+                    data = resp.json()
+            except httpx.TimeoutException:
+                return (f"The scan of {website_url} timed out — the site may be slow or blocking automated access. "
+                        "You can add your business info manually by saying 'set my hours' or 'add services'.")
+            except Exception as e:
+                return (f"I couldn't reach {website_url} right now ({type(e).__name__}). "
+                        "Please double-check the URL and try again, or add info manually.")
 
-                pages = data.get("pages", data.get("saved", 0))
+            if not data.get("ok"):
+                err = data.get("error", "unknown error")
+                return (f"The website scan ran but returned: {err}. "
+                        "You can add your info manually — just tell me your hours, phone, or services.")
 
-                # Extract key fields from knowledge_base entries
-                hours_found = None
-                phone_found = None
-                email_found = None
-                address_found = None
-                if sb and business_id:
-                    try:
-                        kb = sb.from_("knowledge_base").select("content_text,content_type").eq("business_id", business_id).order("created_at", desc=True).limit(30).execute()
-                        all_text = " ".join(r.get("content_text","") for r in (kb.data or []))
-                        # Extract phone
-                        phones = _re.findall(r"[\(]?\d{3}[\)]?[-.\s]\d{3}[-.\s]\d{4}", all_text)
-                        if phones: phone_found = phones[0]
-                        # Extract email
-                        emails = _re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", all_text)
-                        if emails: email_found = emails[0]
-                        # Look for hours-related text
-                        for r in (kb.data or []):
-                            txt = r.get("content_text","")
-                            if any(w in txt.lower() for w in ["monday","tuesday","hours","am","pm","open","closed"]):
-                                hours_found = txt[:300]
-                                break
-                        # Look for address
-                        addr_match = _re.search(r"[\d]+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Blvd|Drive|Dr|Lane|Ln|Way|Pike)[,\s]+[\w\s]+,\s+[A-Z]{2}\s+[\d]{5}", all_text)
-                        if addr_match: address_found = addr_match.group(0)
-                    except Exception as ke:
-                        logger.warning(f"KB extract error: {ke}")
+            pages = data.get("pages", data.get("saved", 0))
 
-                # Save scan summary to ai_memory for future sessions
-                summary = {
-                    "pages": pages, "phone": phone_found,
-                    "email": email_found, "hours": hours_found, "address": address_found,
-                    "url": website_url
-                }
-                if sb and business_id:
-                    try:
-                        sb.from_("ai_memory").upsert({
-                            "business_id": business_id, "category": "system",
-                            "memory_key": "last_scan_summary",
-                            "memory_value": _json.dumps(summary),
-                            "created_at": datetime.now().isoformat()
-                        }, on_conflict="business_id,memory_key").execute()
-                    except: pass
+            # Extract key fields — read from ai_memory (where ingest saves)
+            hours_found = phone_found = email_found = address_found = None
+            if sb and business_id:
+                try:
+                    # ai_memory is where the ingest route saves (not knowledge_base)
+                    mems = sb.from_("ai_memory").select("memory_key,memory_value,category").eq("business_id", business_id).in_("category", ["website_content","general","business_rule"]).order("created_at", desc=True).limit(50).execute()
+                    all_text = " ".join(r.get("memory_value","") for r in (mems.data or []))
+                    phones = _re.findall(r"[\(]?\d{3}[\)]?[-.\s]\d{3}[-.\s]\d{4}", all_text)
+                    if phones: phone_found = phones[0]
+                    emails = _re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", all_text)
+                    if emails: email_found = emails[0]
+                    for r in (mems.data or []):
+                        txt = r.get("memory_value","")
+                        if any(w in txt.lower() for w in ["monday","tuesday","wednesday","hours","am","pm","open","closed"]):
+                            hours_found = txt[:300]
+                            break
+                    addr_match = _re.search(r"\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Blvd|Drive|Dr|Lane|Ln|Way)[,\s]+[\w\s]+,\s+[A-Z]{2}\s+\d{5}", all_text)
+                    if addr_match: address_found = addr_match.group(0)
+                except Exception as ke:
+                    logger.warning(f"ai_memory extract error: {ke}")
 
-                # Build report for Aria to read to owner
-                parts = [f"I scanned {pages} pages from {website_url}."]
-                if hours_found:
-                    parts.append(f"I found these hours: {hours_found[:200]}")
-                else:
-                    parts.append("I didn't find business hours on the site.")
-                if phone_found:
-                    parts.append(f"Phone: {phone_found}")
-                if email_found:
-                    parts.append(f"Email: {email_found}")
-                if address_found:
-                    parts.append(f"Address: {address_found}")
-                parts.append("INSTRUCTION: Now read this back to the owner clearly, then ask: 'Is this information correct? Shall I save it to your dashboard?' If they confirm, call save_confirmed_scan_data.")
-                return " | ".join(parts)
+            # Save scan summary
+            summary = {"pages": pages, "phone": phone_found, "email": email_found,
+                       "hours": hours_found, "address": address_found, "url": website_url}
+            if sb and business_id:
+                try:
+                    sb.from_("ai_memory").upsert({
+                        "business_id": business_id, "category": "system",
+                        "memory_key": "last_scan_summary",
+                        "memory_value": _json.dumps(summary),
+                    }, on_conflict="business_id,memory_key").execute()
+                except: pass
+
+            # Build clear report for Aria
+            if pages == 0:
+                return (f"I reached {website_url} but couldn't extract text from it — the site may use JavaScript rendering. "
+                        "Please tell me your hours, phone, and email directly and I'll save them.")
+
+            parts = [f"I scanned {pages} page{'s' if pages!=1 else ''} from {website_url}."]
+            if hours_found:
+                parts.append(f"Hours found: {hours_found[:200]}")
+            else:
+                parts.append("No business hours found on the site.")
+            if phone_found:
+                parts.append(f"Phone: {phone_found}")
+            if email_found:
+                parts.append(f"Email: {email_found}")
+            if address_found:
+                parts.append(f"Address: {address_found}")
+            if not any([phone_found, email_found, hours_found]):
+                parts.append("The site content was saved to your knowledge base but key details weren't detected. You can add them manually.")
+            parts.append("INSTRUCTION: Read this back clearly to the owner, then ask: 'Is this correct? Shall I save it to your dashboard?' If yes, call save_confirmed_scan_data.")
+            return " | ".join(parts)
 
         except Exception as e:
             logger.error(f"scan_website error: {e}")
-            return "I couldn't scan the website right now. Please try again or add the info manually."
+            return (f"Something went wrong scanning the website ({type(e).__name__}). "
+                    "Please try again or add your business info — hours, phone, email — by speaking them to me directly.")
 
     @function_tool
     async def save_confirmed_scan_data(ctx: RunContext, hours: str = "", phone: str = "", email: str = "", address: str = "") -> str:
@@ -1675,7 +1741,7 @@ ONBOARDING RULES:
         llm=openai.LLM(model="gpt-4o-mini", temperature=0.7),
         tts=openai.TTS(model="tts-1", voice="shimmer"),
         vad=silero.VAD.load(
-            min_silence_duration=0.6,
+            min_silence_duration=1.1,   # was 0.6 — too short, cut off mid-sentence
             min_speech_duration=0.05,
             activation_threshold=0.35,
         ),
@@ -1844,8 +1910,8 @@ ONBOARDING RULES:
         logger.info(f"Greeting owner by name: {_owner}")
     _greeting_hint = f"Give a warm 1-sentence greeting as {_ai_name}."
     if _owner:
-        _greeting_hint += f" The owner's name is {_owner} — address them by name warmly."
-    _greeting_hint += " One sentence only."
+        _greeting_hint += f" The owner's name is {_owner} — greet them by name. Do NOT ask 'did I get that right' — you already know their name."
+    _greeting_hint += " One sentence only. Do not ask any questions in the greeting."
 
     try:
         await session.generate_reply(instructions=_greeting_hint)
