@@ -1761,6 +1761,27 @@ ONBOARDING RULES:
     # Track any room events as activity
     ctx.room.on("participant_spoke", lambda *_: mark_active())
 
+    # Handle text messages typed by user in the chat box
+    async def on_data_received(data: bytes, participant: Any, kind: Any, topic: str = ""):
+        if topic != "user_text":
+            return
+        try:
+            import json as _json
+            evt = _json.loads(data.decode("utf-8"))
+            text = evt.get("text", "").strip()
+            if not text:
+                return
+            mark_active()
+            logger.info(f"User typed in chat: {text!r}")
+            # Inject as a user message into the session
+            await session.generate_reply(
+                instructions="The owner just typed in the chat: " + repr(text) + ". Treat this exactly as if they said it out loud and respond naturally."
+            )
+        except Exception as e:
+            logger.warning(f"on_data_received error: {e}")
+
+    ctx.room.on("data_received", lambda data, participant, kind, topic="": asyncio.create_task(on_data_received(data, participant, kind, topic)))
+
     async def keepalive_task():
         """Prevent idle disconnect — only prompt after very long silence."""
         while True:
