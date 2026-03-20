@@ -637,15 +637,15 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
             }, on_conflict="business_id,memory_key").execute()
     except: pass
 
-    # Load scanned knowledge (last 5 items, summarized)
+    # Load scanned knowledge from ai_memory (where /api/knowledge/ingest saves)
     kb_text = ""
     try:
         sb_kb = get_supabase()
         if sb_kb and business_id:
-            kb_res = sb_kb.from_("knowledge_base").select("content_text").eq("business_id", business_id).order("created_at", desc=True).limit(8).execute()
+            kb_res = sb_kb.from_("ai_memory").select("memory_key,memory_value").eq("business_id", business_id).in_("category", ["general","business_rule","instruction"]).order("created_at", desc=True).limit(10).execute()
             if kb_res.data:
-                snippets = [r["content_text"][:200] for r in kb_res.data if r.get("content_text")]
-                kb_text = "\n".join(snippets[:3])
+                snippets = [f"{r['memory_key']}: {r['memory_value'][:200]}" for r in kb_res.data if r.get("memory_value")]
+                kb_text = "\n".join(snippets[:5])
     except: pass
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
