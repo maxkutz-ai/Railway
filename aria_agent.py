@@ -835,13 +835,15 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • Never say "I can't" if you have a tool for it
 • No markdown, no bullet points — natural speech only
 • WEBSITE SCANNING: You CAN scan websites. Rules:
-  - If asked to scan website: say "Click the 🌐 Scan My Website button on screen." Say this ONCE only — do NOT repeat it even if there is silence.
-  - If the user SPEAKS a URL clearly (e.g. "southamptonspa dot com"): reconstruct as https://southamptonspa.com and call scan_website immediately.
-  - After scan_website completes, give a 2-sentence summary of what you found.
-  - CRITICAL: Do NOT repeat the popup instruction. One mention is enough. Wait silently.
+  - If asked to scan website: say "Sure! Please paste your website URL in the chat below — for example: https://yourbusiness.com" Then WAIT SILENTLY. Do not repeat yourself.
+  - When the user sends a URL in chat (it will appear in the transcript starting with http or a domain): call scan_website(website_url=<url>) IMMEDIATELY.
+  - If you hear a URL spoken ("southamptonspa dot com"): reconstruct as https://southamptonspa.com and call scan_website immediately.
+  - After scan_website completes: report back what you found — pages scanned, hours, phone, email. Then ask owner to confirm.
+  - CRITICAL: Say the paste instruction ONCE only. Wait for them to paste. Do not repeat or ask again.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
-• BUSINESS HOURS INPUT: Users can share hours by speaking OR typing in chat. When asking for hours, say "You can speak the hours, type them in the chat, or click the 🌐 button to scan your website." Accept hours from either voice or chat transcript.
+• BUSINESS HOURS INPUT: Users can share hours by speaking OR typing in chat. When asking for hours, say: "You can tell me the hours out loud, or paste them here in the chat."
+• TIME FORMAT: ALWAYS say times in 12-hour format with AM/PM. Never say "09:00" — say "9 AM". Never say "18:00" — say "6 PM". Convert any 24-hour stored values to 12-hour when speaking.
 • Search documents or web before admitting ignorance
 • SUPPORT INFO: If anyone asks about support, help desk, or contacting the team: the support email is support@receptionist.co and the website is receptionist.co. Say this directly without checking.
 
@@ -1760,15 +1762,15 @@ ONBOARDING RULES:
     ctx.room.on("participant_spoke", lambda *_: mark_active())
 
     async def keepalive_task():
-        """Prevent idle disconnect — if silent for 45s, send a gentle prompt."""
+        """Prevent idle disconnect — only prompt after very long silence."""
         while True:
-            await asyncio.sleep(20)
+            await asyncio.sleep(60)
             try:
                 idle_secs = asyncio.get_event_loop().time() - last_activity["t"]
-                if idle_secs > 45:
+                if idle_secs > 120:
                     mark_active()
                     await session.generate_reply(
-                        instructions="One short sentence: ask if they need anything. Maximum 8 words."
+                        instructions="One short sentence: gently check if they are still there. Maximum 8 words."
                     )
             except Exception as e:
                 logger.debug(f"keepalive tick: {e}")
