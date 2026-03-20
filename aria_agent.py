@@ -1788,9 +1788,20 @@ ONBOARDING RULES:
                 return
             mark_active()
             logger.info(f"User typed in chat: {text!r}")
-            await session.generate_reply(
-                instructions="The owner just typed in the chat: " + repr(text) + ". Treat this exactly as if they said it out loud and respond naturally."
+            # Detect if it's a URL — call scan_website directly and reliably
+            is_url = text.startswith("http") or (
+                "." in text and " " not in text and len(text) < 200
             )
+            if is_url:
+                url = text if text.startswith("http") else "https://" + text
+                logger.info(f"URL detected in chat — scanning: {url}")
+                await session.generate_reply(
+                    instructions=f"The owner just pasted this URL in the chat: {url}. Call scan_website(website_url='{url}') RIGHT NOW. Do not say anything before calling it. After the tool returns, report what you found."
+                )
+            else:
+                await session.generate_reply(
+                    instructions="The owner just typed in the chat: " + repr(text) + ". Respond naturally as if they said it out loud."
+                )
         except Exception as e:
             logger.warning(f"on_data_received error: {e}")
 
