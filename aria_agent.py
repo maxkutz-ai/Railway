@@ -266,7 +266,10 @@ async def _execute_confirmed(business_id: str, conf_id: str) -> str:
                 }, on_conflict="business_id").execute()
             except Exception as e2:
                 logger.warning(f"ai_settings upsert failed: {e2}")
-            return f"Got it! Business hours saved: {hours_val}"
+            if hours_val:
+                return f"Got it! Business hours saved: {hours_val}"
+            else:
+                return "I didn't receive the hours data. Please tell me your hours again."
 
         elif action == "log_message":
             # Real messages schema: needs contact_id, message_body, channel, direction
@@ -672,6 +675,13 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     no_loop            = cfg.get("no_loop_rule") or ""
     escalation         = cfg.get("escalation_rules") or ""
     greeting_script    = cfg.get("greeting") or ""
+    # Sanitize greeting: if it contains a name, we'll override with memory-verified name
+    # Detect if greeting_script has "Hi [Name]" pattern and strip the name
+    import re as _re
+    if greeting_script:
+        _greeting_clean = _re.sub(r"Hi\\s+\\w+!", "Hi!", greeting_script)
+        # Only use sanitized version - replace name with dynamic name at runtime
+        greeting_script = _greeting_clean
     flow_script        = cfg.get("flow_script") or ""
 
     # Build structured custom block — only include non-empty sections
@@ -831,6 +841,7 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
   - CRITICAL: Do NOT repeat the popup instruction. One mention is enough. Wait silently.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
+• BUSINESS HOURS INPUT: Users can share hours by speaking OR typing in chat. When asking for hours, say "You can speak the hours, type them in the chat, or click the 🌐 button to scan your website." Accept hours from either voice or chat transcript.
 • Search documents or web before admitting ignorance
 • SUPPORT INFO: If anyone asks about support, help desk, or contacting the team: the support email is support@receptionist.co and the website is receptionist.co. Say this directly without checking.
 
@@ -839,7 +850,7 @@ GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owne
 SESSION #{str(video_count + 1)} WITH THIS BUSINESS.
 {"""FIRST SESSION ONBOARDING: This is the owner's first time speaking with you. After greeting them, introduce yourself warmly and explain what you can help with. Then proactively say:
 1. "I don't have your name yet — what should I call you?" (save it when they tell you)  
-2. "I also don't see your business hours set up yet. Want me to help? I can: scan your website to pull hours automatically, or you can just tell me the days and times right now."
+2. "I also don't see your business hours set up yet. Would you like me to scan your website to pull the hours? If so, just say your website URL and I'll do it, or click the 🌐 Scan My Website button. You can also just tell me the days and times, or type them in the chat right now."
 3. "Do you have a contact number or email I should have on file?"
 Keep it conversational — don't dump all questions at once. Flow naturally.""" if video_count == 0 else ""}
 {"""SECOND SESSION FOLLOW-UP: This is their second session. If business hours or contact info were not set up last time, gently remind them: 'Last time we didn't quite finish setting up your hours or contact info — want to take care of that now?'""" if video_count == 1 else ""}
