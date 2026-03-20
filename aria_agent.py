@@ -645,7 +645,7 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
             kb_res = sb_kb.from_("knowledge_base").select("content_text").eq("business_id", business_id).order("created_at", desc=True).limit(8).execute()
             if kb_res.data:
                 snippets = [r["content_text"][:200] for r in kb_res.data if r.get("content_text")]
-                kb_text = "\n".join(snippets[:5])
+                kb_text = "\n".join(snippets[:3])
     except: pass
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
@@ -658,7 +658,7 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
     industry_asks   = ", ".join(industry_script["common_asks"][:5])
 
     # Custom instructions override — if the business has a custom prompt, inject it
-    custom_instructions = (cfg.get("custom_instructions") or "")[:3000]
+    custom_instructions = (cfg.get("custom_instructions") or "")[:1500]
     ai_name             = cfg.get("ai_name") or "Aria"
     role_description    = cfg.get("role_description") or ""
     primary_goal        = cfg.get("primary_goal") or ""
@@ -848,12 +848,8 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 GREETING: {"(\"" + greeting_script + "\")" if greeting_script else ("Hi " + owner_name + "! I'm " + ai_name + ". How can I help?" if owner_name else "Hi! I'm " + ai_name + ". How can I help?")}
 
 SESSION #{str(video_count + 1)} WITH THIS BUSINESS.
-{"""FIRST SESSION ONBOARDING: This is the owner's first time speaking with you. After greeting them, introduce yourself warmly and explain what you can help with. Then proactively say:
-1. "I don't have your name yet — what should I call you?" (save it when they tell you)  
-2. "I also don't see your business hours set up yet. Would you like me to scan your website to pull the hours? If so, just say your website URL and I'll do it, or click the 🌐 Scan My Website button. You can also just tell me the days and times, or type them in the chat right now."
-3. "Do you have a contact number or email I should have on file?"
-Keep it conversational — don't dump all questions at once. Flow naturally.""" if video_count == 0 else ""}
-{"""SECOND SESSION FOLLOW-UP: This is their second session. If business hours or contact info were not set up last time, gently remind them: 'Last time we didn't quite finish setting up your hours or contact info — want to take care of that now?'""" if video_count == 1 else ""}
+{"""FIRST SESSION: Ask name, then offer to set up hours (scan website OR dictate OR type in chat), then ask for contact info. One question at a time.""" if video_count == 0 else ""}
+{"""SECOND SESSION: If hours/contact not set up last time, offer to do it now.""" if video_count == 1 else ""}
 """
 
 
@@ -1806,10 +1802,9 @@ ONBOARDING RULES:
     try:
         await session.generate_reply(instructions=_greeting_hint)
     except RuntimeError as e:
-        if "closing" in str(e).lower():
-            logger.info("Session closed before greeting — user disconnected quickly")
-        else:
-            raise
+        logger.info(f"Session not ready for greeting ({e}) — user may have disconnected")
+    except Exception as e:
+        logger.warning(f"Greeting failed: {e}")
 
     logger.info(f"Aria ready for {business_name} (room: {ctx.room.name})")
 
