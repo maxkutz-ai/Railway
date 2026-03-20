@@ -1,4 +1,4 @@
-# Let pip resolve compatible versions automatically
+# ── Aria Video Agent (LiveKit) ────────────────────────────────────
 livekit-agents[openai,silero,simli,deepgram]>=0.12.0
 supabase>=2.3.0
 httpx>=0.27.0
@@ -6,3 +6,8 @@ python-dotenv>=1.0.0
 google-api-python-client>=2.0.0
 google-auth>=2.0.0
 dropbox>=11.36.0
+
+# ── Aria Call Handler (FastAPI + Twilio WebSocket) ─────────────────
+fastapi>=0.110.0
+uvicorn>=0.29.0
+websockets>=12.0
