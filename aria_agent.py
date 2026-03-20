@@ -1063,33 +1063,124 @@ ONBOARDING RULES:
         """Scan a business website to extract services, hours, pricing, FAQs and store in knowledge base.
         Call this during onboarding when the owner provides their website URL.
         This overwrites any previous website scan data.
-        Returns a summary of what was found.
+        Returns a structured summary of what was found including hours, phone, email.
+        IMPORTANT: After calling this, read the result carefully and report back:
+        - How many pages were scanned
+        - What hours were found (if any)
+        - What phone/email was found (if any)
+        - Then ask owner to confirm: "Is this information correct? Shall I save it to your dashboard?"
         """
         try:
-            import httpx
+            import httpx, json as _json, re as _re
             app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.receptionist.co")
-            # Save website_url to settings_business first
             sb = get_supabase()
-            if sb:
-                sb.table("settings_business").update({"website_url": website_url}).eq("business_id", business_id).execute()
-                # Clear old website knowledge before re-scanning
-                sb.table("ai_memory").delete().eq("business_id", business_id).eq("category", "website_content").execute()
+            if sb and business_id:
+                try:
+                    sb.table("settings_business").update({"website_url": website_url}).eq("business_id", business_id).execute()
+                except: pass
+                try:
+                    sb.table("ai_memory").delete().eq("business_id", business_id).eq("category", "website_content").execute()
+                except: pass
 
-            # Call the knowledge ingest API
-            async with httpx.AsyncClient(timeout=25) as client:
+            async with httpx.AsyncClient(timeout=45) as client:
                 resp = await client.post(
                     f"{app_url}/api/knowledge/ingest",
                     json={"business_id": business_id, "type": "url", "url": website_url},
                 )
                 data = resp.json()
-                if data.get("ok"):
-                    saved = data.get("saved", 0)
-                    return f"Website scanned successfully! I found and saved {saved} pieces of information about your business — including services, hours, and FAQs. I'll use this to answer client questions accurately."
+                if not data.get("ok"):
+                    return f"I had trouble scanning that website: {data.get('error', 'unknown error')}. Please check the URL is correct and try again."
+
+                pages = data.get("pages", data.get("saved", 0))
+
+                # Extract key fields from knowledge_base entries
+                hours_found = None
+                phone_found = None
+                email_found = None
+                address_found = None
+                if sb and business_id:
+                    try:
+                        kb = sb.from_("knowledge_base").select("content_text,content_type").eq("business_id", business_id).order("created_at", desc=True).limit(30).execute()
+                        all_text = " ".join(r.get("content_text","") for r in (kb.data or []))
+                        # Extract phone
+                        phones = _re.findall(r"[\(]?\d{3}[\)]?[-.\s]\d{3}[-.\s]\d{4}", all_text)
+                        if phones: phone_found = phones[0]
+                        # Extract email
+                        emails = _re.findall(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", all_text)
+                        if emails: email_found = emails[0]
+                        # Look for hours-related text
+                        for r in (kb.data or []):
+                            txt = r.get("content_text","")
+                            if any(w in txt.lower() for w in ["monday","tuesday","hours","am","pm","open","closed"]):
+                                hours_found = txt[:300]
+                                break
+                        # Look for address
+                        addr_match = _re.search(r"[\d]+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Blvd|Drive|Dr|Lane|Ln|Way|Pike)[,\s]+[\w\s]+,\s+[A-Z]{2}\s+[\d]{5}", all_text)
+                        if addr_match: address_found = addr_match.group(0)
+                    except Exception as ke:
+                        logger.warning(f"KB extract error: {ke}")
+
+                # Save scan summary to ai_memory for future sessions
+                summary = {
+                    "pages": pages, "phone": phone_found,
+                    "email": email_found, "hours": hours_found, "address": address_found,
+                    "url": website_url
+                }
+                if sb and business_id:
+                    try:
+                        sb.from_("ai_memory").upsert({
+                            "business_id": business_id, "category": "system",
+                            "memory_key": "last_scan_summary",
+                            "memory_value": _json.dumps(summary),
+                            "created_at": datetime.now().isoformat()
+                        }, on_conflict="business_id,memory_key").execute()
+                    except: pass
+
+                # Build report for Aria to read to owner
+                parts = [f"I scanned {pages} pages from {website_url}."]
+                if hours_found:
+                    parts.append(f"I found these hours: {hours_found[:200]}")
                 else:
-                    return f"I had trouble reading that website ({data.get('error', 'unknown error')}). Please check the URL is correct and publicly accessible. You can try again in Settings → Knowledge."
+                    parts.append("I didn't find business hours on the site.")
+                if phone_found:
+                    parts.append(f"Phone: {phone_found}")
+                if email_found:
+                    parts.append(f"Email: {email_found}")
+                if address_found:
+                    parts.append(f"Address: {address_found}")
+                parts.append("INSTRUCTION: Now read this back to the owner clearly, then ask: 'Is this information correct? Shall I save it to your dashboard?' If they confirm, call save_confirmed_scan_data.")
+                return " | ".join(parts)
+
         except Exception as e:
             logger.error(f"scan_website error: {e}")
-            return "I couldn't scan the website right now, but you can add it later in Settings → Knowledge and I'll scan it automatically."
+            return "I couldn't scan the website right now. Please try again or add the info manually."
+
+    @function_tool
+    async def save_confirmed_scan_data(ctx: RunContext, hours: str = "", phone: str = "", email: str = "", address: str = "") -> str:
+        """Call this when the owner confirms that the scanned website data is correct.
+        Saves hours, phone, email, address to the business settings dashboard.
+        Only call after owner says yes/correct/confirm to the scan results."""
+        try:
+            sb = get_supabase()
+            if not sb or not business_id:
+                return "Session error — please try again."
+            updates = {}
+            if hours: updates["business_hours"] = hours
+            if phone: updates["phone"] = phone
+            if email: updates["email"] = email
+            if address: updates["address"] = address
+            if updates:
+                try:
+                    sb.from_("settings_business").upsert({"business_id": business_id, **updates}, on_conflict="business_id").execute()
+                except: pass
+                try:
+                    sb.from_("business_settings").upsert({"business_id": business_id, **updates}, on_conflict="business_id").execute()
+                except: pass
+            saved_fields = ", ".join(k for k in updates)
+            return f"Saved to your dashboard: {saved_fields}. Your business info is now up to date!"
+        except Exception as e:
+            logger.error(f"save_confirmed_scan_data error: {e}")
+            return "I had trouble saving — please try again."
 
     @function_tool
     async def finish_onboarding(ctx: RunContext) -> str:
@@ -1627,6 +1718,7 @@ ONBOARDING RULES:
                 request_waitlist,
                 request_update_hours,
                 execute_confirmed_action,
+                save_confirmed_scan_data,
                 cancel_pending_action,
                 # Lookups
                 lookup_contact,
