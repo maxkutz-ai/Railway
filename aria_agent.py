@@ -1762,7 +1762,7 @@ ONBOARDING RULES:
     ctx.room.on("participant_spoke", lambda *_: mark_active())
 
     # Handle text messages typed by user in the chat box
-    async def on_data_received(data: bytes, participant: Any, kind: Any, topic: str = ""):
+    async def on_data_received(data: bytes, participant: object, kind: object, topic: str = ""):
         if topic != "user_text":
             return
         try:
