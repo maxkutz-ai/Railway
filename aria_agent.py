@@ -1046,7 +1046,15 @@ Actions needing confirmation:
   • Logging messages
 
 ━━━ DASHBOARD FEATURES (you can tell the owner about these) ━━━
-🎵 MUSIC: The dashboard has a background music player with jazz, classical, and ambient tracks. Tell the owner to use the music controls in the video window to play/stop music. You cannot play it yourself but it's built into their dashboard.
+🎵 MUSIC: You CAN play, stop, and control background music. Tools: play_music(), stop_music(), set_music_volume().
+  - "Play classical music" → play_music(genre="classical") immediately. Say "Playing classical music now."
+  - "Play some jazz" → play_music(genre="jazz") immediately.
+  - "Play something relaxing" → play_music(genre="ambient") immediately.
+  - "Stop the music" → stop_music() immediately.
+  - "Lower the music" → set_music_volume(level=15) immediately.
+  - "A bit louder" → set_music_volume(level=25) immediately. NEVER go above 30.
+  - Volume cap: 30% maximum. If asked for higher, set to 30 and say "That's the maximum."
+  - NEVER say "I can't control the music" — you have the tools, use them.
 📊 USAGE: The dashboard shows their video minute usage and subscription status.
 🔔 ALERTS: Smart alerts appear in the dashboard for missed calls and important events.
 
@@ -1300,6 +1308,76 @@ ONBOARDING RULES:
             return f"Theme request noted: {theme}"
 
     @function_tool
+    async def play_music(ctx: RunContext, genre: str = "", track: str = "") -> str:
+        """Play background music in the dashboard.
+        genre: "classical" | "jazz" | "ambient" | "lofi" | "upbeat" | "cinematic"
+        track: optional specific track name hint
+        Call IMMEDIATELY when owner asks for music — never say you can't play music.
+        Examples:
+          "play classical music" → play_music(genre="classical")
+          "play some jazz" → play_music(genre="jazz")
+          "play something relaxing" → play_music(genre="ambient")
+          "play music" → play_music(genre="")
+        After calling, say: "Playing [genre] music for you now."
+        """
+        import json as _json
+        try:
+            payload = _json.dumps({
+                "type":  "play_music",
+                "genre": genre.lower().strip(),
+                "track": track.strip(),
+            }).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"Music play command sent: genre={genre}")
+        except Exception as e:
+            logger.warning(f"Music play publish failed: {e}")
+        return f"Playing {genre or 'music'} now."
+
+    @function_tool
+    async def stop_music(ctx: RunContext) -> str:
+        """Stop the background music.
+        Call when owner says: "stop the music", "turn off music", "no music", "quiet".
+        After calling, say: "Music stopped."
+        """
+        import json as _json
+        try:
+            payload = _json.dumps({"type": "stop_music"}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info("Music stop command sent")
+        except Exception as e:
+            logger.warning(f"Music stop publish failed: {e}")
+        return "Music stopped."
+
+    @function_tool
+    async def set_music_volume(ctx: RunContext, level: int) -> str:
+        """Set the background music volume.
+        level: 0 to 30 (MAXIMUM IS 30 — hard cap, never go higher).
+        Interpret natural language:
+          "lower the music" / "quieter" → level = 15
+          "a bit lower" → subtract ~5 from current, min 5
+          "louder" / "raise it" → level = 25 (NEVER above 30)
+          "a little louder" → add ~5, MAX 30
+          "mute the music" / "very quiet" → level = 5
+          "normal volume" → level = 20
+          "play at 50%" → level = 15 (50% of 30 = 15, cap applies)
+        IMPORTANT: The maximum allowed level is 30. If owner asks for louder than 30, 
+        set to 30 and say "I've set it to the maximum volume of 30%."
+        After calling, confirm: "Volume set to [level]%."
+        """
+        import json as _json
+        # Hard cap — NEVER exceed 30
+        safe_level = max(0, min(30, int(level)))
+        try:
+            payload = _json.dumps({"type": "set_music_volume", "level": safe_level}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"Music volume set: {safe_level}")
+        except Exception as e:
+            logger.warning(f"Music volume publish failed: {e}")
+        if safe_level < int(level):
+            return f"Volume set to {safe_level}% (that's the maximum allowed)."
+        return f"Volume set to {safe_level}%."
+
+    @function_tool
     async def navigate_to_section(ctx: RunContext, section: str) -> str:
         """Navigate the owner to a specific section of the CRM dashboard.
         section: "dashboard" | "contacts" | "appointments" | "messages" | "calls" | "pipeline" | "analytics" | "campaigns" | "settings"
@@ -1496,12 +1574,26 @@ ONBOARDING RULES:
                             break
                     addr_match = _re.search(r"\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Blvd|Drive|Dr|Lane|Ln|Way)[,\s]+[\w\s]+,\s+[A-Z]{2}\s+\d{5}", all_text)
                     if addr_match: address_found = addr_match.group(0)
+
+                    # ── Extract services from memory keys ────────────────────
+                    services_found = []
+                    for r in (mems.data or []):
+                        k = r.get("memory_key","").lower()
+                        v = r.get("memory_value","")
+                        if any(w in k for w in ["service","treatment","offering","menu","package","price","procedure"]):
+                            services_found.append(v[:120])
+                        # Also catch keys that look like individual services
+                        elif _re.match(r"service_", k) and v:
+                            services_found.append(v[:80])
+                    services_found = services_found[:10]  # cap at 10
+
                 except Exception as ke:
                     logger.warning(f"ai_memory extract error: {ke}")
 
             # Save scan summary
             summary = {"pages": pages, "phone": phone_found, "email": email_found,
-                       "hours": hours_found, "address": address_found, "url": website_url}
+                       "hours": hours_found, "address": address_found, "url": website_url,
+                       "services_count": len(services_found) if 'services_found' in dir() else 0}
             if sb and business_id:
                 try:
                     sb.from_("ai_memory").upsert({
@@ -1511,25 +1603,65 @@ ONBOARDING RULES:
                     }, on_conflict="business_id,memory_key").execute()
                 except: pass
 
+            # Auto-save extracted services to the services table
+            if sb and business_id and services_found:
+                try:
+                    existing_svcs = sb.from_("services").select("name").eq("business_id", business_id).execute()
+                    existing_names = {s["name"].lower() for s in (existing_svcs.data or [])}
+                    new_services = []
+                    for svc_text in services_found:
+                        # Parse "Service Name — $Price, Xmin" format from memory
+                        name_match = _re.match(r"^([^—\-\$]+)", svc_text)
+                        if name_match:
+                            name = name_match.group(1).strip()
+                            if name.lower() not in existing_names and len(name) > 2:
+                                price_match = _re.search(r"\$(\d+(?:\.\d{2})?)", svc_text)
+                                dur_match   = _re.search(r"(\d+)\s*min", svc_text)
+                                new_services.append({
+                                    "business_id": business_id,
+                                    "name":             name[:100],
+                                    "price":            float(price_match.group(1)) if price_match else None,
+                                    "duration_minutes": int(dur_match.group(1))     if dur_match   else None,
+                                    "is_active":        True,
+                                    "booking_source":   "website_scan",
+                                })
+                                existing_names.add(name.lower())
+                    if new_services:
+                        sb.from_("services").insert(new_services).execute()
+                        logger.info(f"Auto-saved {len(new_services)} services from scan for {business_id}")
+                except Exception as se:
+                    logger.warning(f"Auto-save services failed: {se}")
+
             # Build clear report for Aria
             if pages == 0:
                 return (f"I reached {website_url} but couldn't extract text from it — the site may use JavaScript rendering. "
                         "Please tell me your hours, phone, and email directly and I'll save them.")
 
             parts = [f"I scanned {pages} page{'s' if pages!=1 else ''} from {website_url}."]
-            if hours_found:
-                parts.append(f"Hours found: {hours_found[:200]}")
+
+            # Services — most exciting part, lead with this
+            if services_found:
+                svc_names = []
+                for s in services_found[:6]:
+                    m = _re.match(r"^([^—\-\$,]+)", s)
+                    svc_names.append(m.group(1).strip() if m else s[:40])
+                parts.append(f"I found {len(services_found)} service{'s' if len(services_found)!=1 else ''}: {', '.join(svc_names)}.")
+                parts.append(f"I've added them to your services menu automatically.")
             else:
-                parts.append("No business hours found on the site.")
+                parts.append("I didn't find a clear services list — you can add them by telling me or go to Settings → Services.")
+
+            if hours_found:
+                parts.append(f"Hours: {hours_found[:200]}")
+            else:
+                parts.append("No business hours found on the site — want to tell me now?")
             if phone_found:
                 parts.append(f"Phone: {phone_found}")
             if email_found:
                 parts.append(f"Email: {email_found}")
             if address_found:
                 parts.append(f"Address: {address_found}")
-            if not any([phone_found, email_found, hours_found]):
-                parts.append("The site content was saved to your knowledge base but key details weren't detected. You can add them manually.")
-            parts.append("INSTRUCTION: Read this back clearly to the owner, then ask: 'Is this correct? Shall I save it to your dashboard?' If yes, call save_confirmed_scan_data.")
+
+            parts.append("INSTRUCTION: Read this back naturally to the owner — mention services by name if found. Ask: 'Does this look right? Shall I save it all to your dashboard?' If yes, call save_confirmed_scan_data.")
             return " | ".join(parts)
 
         except Exception as e:
@@ -2209,9 +2341,9 @@ ONBOARDING RULES:
 
     # ── Save conversation summary when session ends ────────────────────────
     async def save_conversation_summary():
-        """Called when participant disconnects — saves what was covered this session."""
+        """Called when participant disconnects — saves what was covered this session.
+        Also maintains a rolling condensed summary when sessions exceed 5."""
         try:
-            # Ask the LLM to summarise the session in one sentence
             summary_prompt = (
                 "In one sentence (max 30 words), summarise what was accomplished or discussed "
                 "in this session. Focus on concrete actions taken or topics covered. "
@@ -2225,13 +2357,46 @@ ONBOARDING RULES:
         except Exception:
             summary_text = f"Session {video_count + 1} completed on {datetime.now().strftime('%b %-d, %Y')}."
 
+        # Save this session's summary
         await save_memory_to_db(
             business_id,
             f"conversation_session_{video_count + 1}",
             summary_text,
             "conversation",
         )
-        logger.info(f"Session summary saved for session {video_count + 1}: {summary_text[:80]}")
+        logger.info(f"Session summary saved #{video_count + 1}: {summary_text[:80]}")
+
+        # ── Rolling condensed summary (keeps older sessions from bloating prompt) ──
+        # After 5+ sessions, condense all session summaries into one "history" memory
+        if video_count + 1 >= 5:
+            try:
+                sb = get_supabase()
+                if sb and business_id:
+                    conv_mems = sb.from_("ai_memory").select("memory_key,memory_value,created_at") \
+                        .eq("business_id", business_id).eq("category", "conversation") \
+                        .order("created_at", desc=False).execute()
+                    conv_data = [m for m in (conv_mems.data or []) if m["memory_key"].startswith("conversation_session_")]
+
+                    if len(conv_data) >= 5:
+                        # Condense sessions 1 through N-3 into a single history entry
+                        to_condense = conv_data[:-3]
+                        history_lines = [f"• {m['memory_value']}" for m in to_condense]
+                        condensed = f"[Condensed history from {len(to_condense)} earlier sessions] " + " ".join(history_lines)[:600]
+
+                        sb.from_("ai_memory").upsert({
+                            "business_id":  business_id,
+                            "category":     "conversation",
+                            "memory_key":   "conversation_history_condensed",
+                            "memory_value": condensed,
+                        }, on_conflict="business_id,memory_key").execute()
+
+                        # Delete the old individual session summaries that were condensed
+                        for m in to_condense:
+                            sb.from_("ai_memory").delete().eq("business_id", business_id).eq("memory_key", m["memory_key"]).execute()
+
+                        logger.info(f"Condensed {len(to_condense)} old session summaries into rolling history")
+            except Exception as e:
+                logger.warning(f"Rolling summary condensation failed: {e}")
 
     def on_participant_disconnected(participant: any):
         if hasattr(participant, "identity") and participant.identity != "aria-agent":
