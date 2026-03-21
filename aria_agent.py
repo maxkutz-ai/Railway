@@ -989,6 +989,536 @@ DEEPDIVE_QUESTIONS: dict = {
         ("about_page_details",           "Where can clients learn more about your company — your story, team, values? Any specific page?"),
     ],
 
+    # ══ BEAUTY GROUP (shares salon whiteboard style) ═════════════════════════
+
+    "barber": [
+        ("services_offered",             "What haircut services do you specialize in — fades, tapers, classic cuts, kids?"),
+        ("beard_services",               "Do you do beard trims, hot towel shaves, or beard shaping?"),
+        ("walk_ins_policy",              "Do you take walk-ins, or is it appointments only?"),
+        ("haircut_pricing",              "How much is a standard haircut? And is there a different price for kids?"),
+        ("appointment_duration",         "How long does a typical haircut take?"),
+        ("booking_method",               "How do clients book — phone, app, walk in, or online?"),
+        ("business_hours",               "What are your hours? You can tell me all at once."),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("parking_available",            "Is parking available at your location?"),
+        ("social_media_platforms",       "Are you on Instagram or TikTok? Clients often ask where to see your work."),
+        ("discounts_promotions",         "Do you offer first-visit discounts, loyalty cards, or referral deals?"),
+        ("complaint_escalation",         "If a client isn't happy with their cut, what's your policy — fix it, refund it?"),
+        ("staff_count",                  "How many barbers are on staff? Can clients request a specific barber?"),
+    ],
+
+    "nail_salon": [
+        ("services_offered",             "What nail services do you offer — manicures, pedicures, gel, acrylic, dip?"),
+        ("walk_ins_policy",              "Do you take walk-ins, or is it appointments only?"),
+        ("nail_art",                     "Do you offer nail art or custom designs?"),
+        ("removal_services",             "Do you remove old acrylic or gel nails?"),
+        ("pricing",                      "What's the price range for a basic mani-pedi? Any specialty add-ons?"),
+        ("appointment_duration",         "How long does a typical appointment take?"),
+        ("booking_method",               "How do clients book?"),
+        ("business_hours",               "What are your hours?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("sanitation_standards",         "Clients often ask — how do you sterilize tools between clients?"),
+        ("social_media_platforms",       "Are you on Instagram? Clients love seeing nail art examples."),
+        ("discounts_promotions",         "Do you offer packages, loyalty programs, or group discounts?"),
+        ("complaint_escalation",         "If a client has a chipping issue within a few days, what's your policy?"),
+    ],
+
+    "lash_studio": [
+        ("services_offered",             "What lash services do you offer — classic, hybrid, volume, mega volume, lash lifts?"),
+        ("appointment_duration",         "How long does a full set take? How about a fill?"),
+        ("lash_longevity",               "How long do lash extensions typically last before a fill is needed?"),
+        ("prep_instructions",            "How should clients prepare — no makeup, no caffeine, anything else?"),
+        ("aftercare_advice",             "What aftercare do you recommend to help lashes last longer?"),
+        ("fill_policy",                  "When should clients come back for a fill, and what's the price difference?"),
+        ("booking_method",               "How do clients book an appointment?"),
+        ("cancellation_policy",          "What's your cancellation or late policy?"),
+        ("pricing",                      "What's the price range for a full set and a fill?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("allergy_policy",               "What happens if a client has a reaction or allergy concern?"),
+        ("social_media_platforms",       "Are you on Instagram? Clients often ask to see your lash work."),
+        ("discounts_promotions",         "Do you offer new client specials or referral discounts?"),
+        ("complaint_escalation",         "If a client has retention issues early on, what do you do?"),
+    ],
+
+    "brow_studio": [
+        ("services_offered",             "What brow services do you offer — waxing, threading, tinting, lamination, microblading?"),
+        ("appointment_duration",         "How long does each service take?"),
+        ("results_longevity",            "How long do results typically last for each service?"),
+        ("prep_instructions",            "Should clients do anything before their appointment — avoid retinol, grow out brows?"),
+        ("walk_ins_policy",              "Do you accept walk-ins?"),
+        ("consultation_offered",         "Do you offer brow consultations or shape assessments?"),
+        ("booking_method",               "How do clients book?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for your most popular services?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("social_media_platforms",       "Are you on Instagram? Clients love seeing before-and-after brow transformations."),
+        ("discounts_promotions",         "Any packages or loyalty perks?"),
+        ("complaint_escalation",         "If a client isn't happy with their shape, what's your process?"),
+        ("contraindications",            "Are there any skin conditions or medications that affect treatment?"),
+    ],
+
+    "med_spa": [
+        ("services_offered",             "What med spa treatments do you offer — Botox, fillers, laser, microneedling, chemical peels?"),
+        ("consultation_process",         "Do you require a consultation before treatments?"),
+        ("licensed_providers",           "Are treatments performed by licensed medical professionals — RN, NP, or physician?"),
+        ("downtime_info",                "What's the typical downtime for your most popular treatments?"),
+        ("right_treatment_guidance",     "How do clients find out which treatment is right for them?"),
+        ("packages_memberships",         "Do you offer packages, memberships, or loyalty programs?"),
+        ("pricing",                      "Can you give me a general price range for your top services?"),
+        ("booking_method",               "How do clients schedule an appointment?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("payment_methods",              "What payment methods do you accept? Do you offer financing?"),
+        ("contraindications",            "Are there conditions — pregnancy, medications — that would prevent certain treatments?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("social_media_platforms",       "Are you on Instagram? Med spa clients love seeing results."),
+        ("before_after_photos",          "Do you take before-and-after photos for client records?"),
+        ("complaint_escalation",         "If a client has a concern after a treatment, what's the process?"),
+    ],
+
+    "massage_studio": [
+        ("services_offered",             "What types of massage do you offer — Swedish, deep tissue, hot stone, sports, prenatal?"),
+        ("couples_massage",              "Do you offer couples massage?"),
+        ("session_lengths",              "What session lengths are available — 30, 60, 90 minutes?"),
+        ("appointment_required",         "Do clients need an appointment or can they walk in?"),
+        ("therapist_preference",         "Can clients request a specific therapist or gender preference?"),
+        ("what_to_wear",                 "What should clients wear or expect during their first massage?"),
+        ("prenatal_policy",              "Do you offer prenatal massage? Any trimester restrictions?"),
+        ("booking_method",               "How do clients book?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for your sessions?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("social_media_platforms",       "Are you on social media? Where can clients learn more about your studio?"),
+        ("packages_memberships",         "Do you offer massage packages or monthly memberships?"),
+        ("complaint_escalation",         "If a client is uncomfortable during a session, what's the protocol?"),
+    ],
+
+    "esthetician": [
+        ("services_offered",             "What facial treatments do you offer — hydrafacials, chemical peels, microdermabrasion, acne facials?"),
+        ("skin_type_guidance",           "How do you help clients choose the right facial for their skin type?"),
+        ("acne_sensitive_skin",          "Do you treat acne-prone or sensitive skin?"),
+        ("appointment_duration",         "How long does a typical facial take?"),
+        ("recommended_frequency",        "How often should clients get a facial for best results?"),
+        ("prep_instructions",            "What should clients do or avoid before their appointment?"),
+        ("products_used",                "What skincare product lines do you use?"),
+        ("consultation_offered",         "Do you offer skin consultations before the first appointment?"),
+        ("booking_method",               "How do clients book?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for your most popular facials?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("social_media_platforms",       "Are you on Instagram? Clients love seeing skincare results."),
+        ("complaint_escalation",         "If a client has a reaction after a treatment, what's your process?"),
+    ],
+
+    "tanning_salon": [
+        ("services_offered",             "What tanning services do you offer — UV beds, spray tan, bronzing?"),
+        ("spray_tan_details",            "Do you offer spray tans? What brands or formulas?"),
+        ("tan_longevity",                "How long does a tan typically last?"),
+        ("prep_instructions",            "How should clients prepare before a spray tan or UV session?"),
+        ("walk_ins_policy",              "Do clients need an appointment or can they walk in?"),
+        ("products_available",           "Do you sell tanning lotions, accelerators, or aftercare products?"),
+        ("pricing",                      "What are your session prices or membership options?"),
+        ("packages_memberships",         "Do you offer monthly packages or unlimited memberships?"),
+        ("business_hours",               "What are your hours?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("safety_info",                  "Do you have guidelines around UV exposure frequency or skin type?"),
+        ("social_media_platforms",       "Are you on social media? Where can clients follow you?"),
+        ("discounts_promotions",         "Any new client specials or referral offers?"),
+        ("complaint_escalation",         "If a client has an issue with their spray tan result, what do you do?"),
+    ],
+
+    "tattoo_studio": [
+        ("services_offered",             "What tattoo services do you offer — custom designs, flash, cover-ups, fine line, traditional?"),
+        ("walk_ins_policy",              "Do you take walk-ins or is it appointments only?"),
+        ("custom_design_process",        "How does the custom tattoo design process work?"),
+        ("pricing_model",                "How is pricing determined — hourly, flat rate, or by size?"),
+        ("age_policy",                   "What is your age policy? Do you require ID?"),
+        ("prep_instructions",            "How should clients prepare the day of their appointment?"),
+        ("aftercare_instructions",       "What aftercare do you recommend after getting a tattoo?"),
+        ("cover_up_policy",              "Do you do cover-ups? What's the process for assessing an existing tattoo?"),
+        ("consultation_process",         "Do you require a consultation before booking?"),
+        ("booking_method",               "How do clients book an appointment or consultation?"),
+        ("cancellation_policy",          "What's your deposit and cancellation policy?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("social_media_platforms",       "Are you on Instagram? Clients always want to see artist portfolios."),
+        ("artist_specialties",           "Do different artists specialize in different styles?"),
+        ("complaint_escalation",         "If a client isn't happy with their tattoo, what's your process?"),
+    ],
+
+    "wellness_clinic": [
+        ("services_offered",             "What wellness services do you offer — acupuncture, IV therapy, cryotherapy, float tanks, red light?"),
+        ("consultation_required",        "Do new clients need a consultation before their first session?"),
+        ("best_treatments",              "What treatments do you recommend for stress, chronic pain, or recovery?"),
+        ("licensed_providers",           "Are your practitioners licensed and certified?"),
+        ("insurance_accepted",           "Do you accept health insurance or HSA/FSA?"),
+        ("packages_memberships",         "Do you offer memberships or treatment packages?"),
+        ("booking_method",               "How do clients schedule?"),
+        ("business_hours",               "What are your hours?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for your most popular services?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("gift_cards",                   "Do you sell gift cards?"),
+        ("contraindications",            "Are there health conditions that would affect eligibility for treatments?"),
+        ("social_media_platforms",       "Are you on social media? Where can clients learn more?"),
+        ("complaint_escalation",         "If a client has a concern after a session, what's the protocol?"),
+    ],
+
+    # ══ TRADES GROUP (shares HVAC/dark chalk + tool illustration style) ═══════
+
+    "electrician": [
+        ("services_offered",             "What electrical services do you offer — residential, commercial, panels, outlets, lighting?"),
+        ("emergency_service",            "Do you provide emergency or after-hours service?"),
+        ("licensed_insured",             "Are you licensed and insured? Clients almost always ask this."),
+        ("free_estimates",               "Do you offer free estimates?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("pricing_model",                "How do you charge — flat rate, hourly, or by job?"),
+        ("common_jobs",                  "What are your most common jobs — breaker panels, EV chargers, ceiling fans, outdoor lighting?"),
+        ("appointment_or_dispatch",      "How do clients schedule service — phone call, online booking, or dispatch?"),
+        ("response_time",                "How quickly can you typically respond or arrive?"),
+        ("warranties_guarantees",        "Do you warranty your work?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("financing_available",          "Do you offer financing for larger jobs?"),
+        ("social_media_platforms",       "Are you on any social media or review sites clients should know about?"),
+        ("discounts_promotions",         "Do you offer senior, military, or first-time customer discounts?"),
+        ("complaint_escalation",         "If a client has an issue after a job is completed, what's your process?"),
+    ],
+
+    "appliance_repair": [
+        ("services_offered",             "What appliances do you repair — fridges, washers, dryers, dishwashers, ovens?"),
+        ("brands_serviced",              "Do you work on all brands, or are there some you don't service?"),
+        ("same_day_service",             "Do you offer same-day or next-day service?"),
+        ("estimate_process",             "Do you provide estimates before starting a repair?"),
+        ("warranty_on_repairs",          "Do you offer a warranty on parts and labor?"),
+        ("repair_duration",              "How long does a typical repair take — same visit or multiple?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients schedule a repair?"),
+        ("pricing_model",                "How do you charge — flat fee, hourly, or diagnostic + parts?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("parts_availability",           "Do you stock common parts or do you order them?"),
+        ("social_media_platforms",       "Are you on any review sites like Google or Yelp clients should check?"),
+        ("discounts_promotions",         "Do you offer any discounts for repeat customers?"),
+        ("complaint_escalation",         "If a repaired appliance breaks again soon after, what's your policy?"),
+    ],
+
+    "garage_door": [
+        ("services_offered",             "Do you repair and install garage doors and openers?"),
+        ("emergency_service",            "Do you offer emergency repair service?"),
+        ("common_repairs",               "What are the most common repairs — springs, cables, openers, panels?"),
+        ("new_door_installation",        "Do you install brand-new garage doors? What brands do you carry?"),
+        ("same_day_service",             "Can you typically come out the same day?"),
+        ("free_estimates",               "Do you offer free estimates?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients schedule service?"),
+        ("pricing_model",                "How do you price repairs — flat rate or by job type?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("warranties_guarantees",        "Do you warranty your work?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("social_media_platforms",       "Are you on any review sites clients should check?"),
+        ("discounts_promotions",         "Do you offer any seasonal promotions?"),
+        ("complaint_escalation",         "If there's an issue after a repair, how do clients reach you?"),
+    ],
+
+    "locksmith": [
+        ("services_offered",             "What locksmith services do you offer — lockouts, rekeying, new locks, smart locks, key duplication?"),
+        ("emergency_lockout",            "Do you offer 24/7 emergency lockout service?"),
+        ("vehicle_service",              "Do you work on cars as well as homes and businesses?"),
+        ("response_time",                "How quickly can you typically arrive?"),
+        ("smart_lock_install",           "Do you install smart locks and keypad entry systems?"),
+        ("key_duplication",              "Can you make new keys on-site?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("pricing_model",                "How do you price your services — flat rate or by job?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients request service?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("rekey_vs_replace",             "When do you recommend rekeying vs. replacing locks entirely?"),
+        ("social_media_platforms",       "Are you on Google or any review platforms?"),
+        ("discounts_promotions",         "Do you offer senior or military discounts?"),
+        ("complaint_escalation",         "If there's a concern after a job, what's your process?"),
+    ],
+
+    "pest_control": [
+        ("pests_treated",                "What pests do you treat — ants, roaches, rodents, termites, bed bugs, mosquitoes?"),
+        ("service_frequency",            "Do you offer one-time treatments or recurring service plans?"),
+        ("pet_child_safety",             "Are your treatments safe for pets and children?"),
+        ("response_time",                "How quickly can you come out after someone calls?"),
+        ("free_inspections",             "Do you offer free inspections?"),
+        ("treatment_duration",           "How long does a typical treatment take?"),
+        ("guarantee_policy",             "Do you guarantee your work — what happens if pests return?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients book service?"),
+        ("pricing_model",                "How do you price — flat rate, square footage, or by pest type?"),
+        ("licensed_insured",             "Are your technicians licensed?"),
+        ("prep_instructions",            "Do clients need to do anything to prepare before treatment?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("social_media_platforms",       "Are you on any review sites clients should check?"),
+        ("complaint_escalation",         "If a treatment doesn't work, what's your follow-up process?"),
+    ],
+
+    "roofing": [
+        ("services_offered",             "Do you do roof repairs, full replacements, and new installs?"),
+        ("free_inspections",             "Do you offer free roof inspections?"),
+        ("insurance_claims",             "Can you help clients navigate insurance claims for storm damage?"),
+        ("roofing_materials",            "What types of roofing do you install — asphalt, metal, tile, flat?"),
+        ("project_duration",             "How long does a typical roof replacement take?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("financing_available",          "Do you offer financing options?"),
+        ("warranty_offered",             "What kind of warranty do you offer on materials and labor?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients schedule an estimate?"),
+        ("pricing_model",                "How is pricing determined — square footage, pitch, material?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("subcontractors",               "Do you use your own crew or subcontractors?"),
+        ("social_media_platforms",       "Are you on any review sites? Roofing clients rely heavily on reviews."),
+        ("complaint_escalation",         "If there's a leak after work is done, what's your process?"),
+    ],
+
+    "handyman": [
+        ("services_offered",             "What handyman services do you offer — drywall, painting, furniture assembly, tile, fixtures?"),
+        ("job_size_range",               "Do you handle small repairs only, or larger projects too?"),
+        ("pricing_model",                "Do you charge by the hour or by the job?"),
+        ("same_day_service",             "Do you offer same-day service?"),
+        ("photo_estimate",               "Can clients send photos for a quote before booking?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("licensed_insured",             "Are you insured?"),
+        ("booking_method",               "How do clients book?"),
+        ("minimum_job_requirement",      "Is there a minimum job size or minimum charge?"),
+        ("supplies_included",            "Do you bring your own supplies, or do clients need to provide materials?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("turnaround_time",              "How far out is your schedule typically?"),
+        ("social_media_platforms",       "Are you on any review platforms clients should check?"),
+        ("discounts_promotions",         "Do you offer any discounts for larger project scopes?"),
+        ("complaint_escalation",         "If a client isn't satisfied with the work, what's your policy?"),
+    ],
+
+    "cleaning": [
+        ("services_offered",             "What cleaning services do you offer — standard, deep clean, move-in/out, commercial?"),
+        ("service_frequency",            "Do you offer recurring service — weekly, bi-weekly, monthly?"),
+        ("supplies_included",            "Do your cleaners bring their own supplies and equipment?"),
+        ("pricing_model",                "How do you price — flat rate, by square footage, or hourly?"),
+        ("client_home_during",           "Does the client need to be home during the cleaning?"),
+        ("background_checks",            "Are your cleaners insured and background-checked?"),
+        ("specialty_cleaning",           "Do you offer move-in or move-out cleaning? Post-construction?"),
+        ("booking_method",               "How do clients schedule a cleaning?"),
+        ("cancellation_policy",          "What's your cancellation or rescheduling policy?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("add_on_services",              "Do you offer add-ons like inside fridge, oven, or window cleaning?"),
+        ("social_media_platforms",       "Are you on Google or any review platforms?"),
+        ("discounts_promotions",         "Do you offer a discount for first-time clients or referrals?"),
+        ("complaint_escalation",         "If something is missed or damaged, what's your process?"),
+    ],
+
+    "junk_removal": [
+        ("items_accepted",               "What items do you remove — furniture, appliances, yard waste, construction debris?"),
+        ("items_not_accepted",           "Are there items you can't take — hazardous materials, paint, tires?"),
+        ("same_day_service",             "Do you offer same-day pickup?"),
+        ("pricing_model",                "How do you price — by truck load, item count, or weight?"),
+        ("full_property_cleanouts",      "Do you do full cleanouts of garages, storage units, or estates?"),
+        ("donate_recycle_policy",        "Do you donate or recycle items when possible?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("booking_method",               "How do clients book a pickup?"),
+        ("on_site_estimate",             "Do you give an estimate on-site before starting?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("heavy_item_handling",          "Can you handle very heavy items like pianos or safes?"),
+        ("social_media_platforms",       "Are you on any review platforms clients should check?"),
+        ("discounts_promotions",         "Any discounts for large loads or repeat customers?"),
+        ("complaint_escalation",         "If something is left behind or there's a concern, how do clients reach you?"),
+    ],
+
+    # ══ PROFESSIONAL GROUP (dark chalk, clean serif, blue accent) ════════════
+
+    "dentist": [
+        ("services_offered",             "What dental services do you offer — cleanings, fillings, crowns, implants, whitening, Invisalign?"),
+        ("new_patients",                 "Are you currently accepting new patients?"),
+        ("insurance_accepted",           "What dental insurance plans do you accept?"),
+        ("cleaning_exam_process",        "What does a routine cleaning and exam include?"),
+        ("cosmetic_dentistry",           "Do you offer cosmetic services like veneers, whitening, or smile makeovers?"),
+        ("emergency_dental",             "What should a patient do in a dental emergency?"),
+        ("payment_plans",                "Do you offer payment plans or financing for larger procedures?"),
+        ("appointment_duration",         "How long is a typical first appointment?"),
+        ("booking_method",               "How do patients schedule an appointment?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pediatric_dentistry",          "Do you treat children? What age do you start seeing patients?"),
+        ("sedation_options",             "Do you offer sedation or nitrous oxide for anxious patients?"),
+        ("parking_available",            "Is parking available at your office?"),
+        ("social_media_platforms",       "Are you on Google? Reviews are huge for dental practices."),
+        ("complaint_escalation",         "If a patient has a concern after a procedure, what's the process?"),
+    ],
+
+    "chiropractor": [
+        ("services_offered",             "What chiropractic services do you offer — adjustments, decompression, dry needling, massage?"),
+        ("conditions_treated",           "What conditions do you treat — back pain, neck pain, headaches, sciatica?"),
+        ("consultation_required",        "Does a new patient need a consultation first?"),
+        ("insurance_accepted",           "What insurance plans do you accept?"),
+        ("appointment_duration",         "How long is a typical appointment?"),
+        ("treatment_frequency",          "How often do patients typically need to come in?"),
+        ("walk_ins_policy",              "Do you accept walk-ins or is it appointments only?"),
+        ("x_ray_on_site",                "Do you do X-rays on-site?"),
+        ("payment_plans",                "Do you offer payment plans for patients without insurance?"),
+        ("booking_method",               "How do patients book?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("parking_available",            "Is parking available?"),
+        ("social_media_platforms",       "Are you on Google Reviews? Chiropractic patients rely heavily on reviews."),
+        ("discounts_promotions",         "Do you offer a new patient special or family discount?"),
+        ("complaint_escalation",         "If a patient has a concern after an adjustment, what's the process?"),
+    ],
+
+    "physical_therapy": [
+        ("conditions_treated",           "What conditions do you treat — post-surgery, sports injuries, chronic pain, neurological?"),
+        ("referral_required",            "Do patients need a doctor's referral?"),
+        ("insurance_accepted",           "What insurance plans do you accept?"),
+        ("session_duration",             "How long is a typical therapy session?"),
+        ("treatment_plan_length",        "How many sessions does a typical treatment plan involve?"),
+        ("home_exercise_plans",          "Do you provide home exercise programs between sessions?"),
+        ("what_to_wear",                 "What should patients wear to their sessions?"),
+        ("evaluation_process",           "What happens during an initial evaluation?"),
+        ("booking_method",               "How do patients schedule an evaluation?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("payment_plans",                "Do you offer payment plans for patients without coverage?"),
+        ("telehealth_available",         "Do you offer telehealth or virtual sessions?"),
+        ("parking_available",            "Is parking available at your clinic?"),
+        ("social_media_platforms",       "Are you on Google Reviews?"),
+        ("complaint_escalation",         "If a patient has a concern about their treatment plan, what's the process?"),
+    ],
+
+    "real_estate": [
+        ("services_offered",             "Do you help buyers, sellers, or both? Do you also handle rentals?"),
+        ("service_area",                 "What cities or neighborhoods do you specialize in?"),
+        ("buyer_process",                "How does the home-buying process work with your team?"),
+        ("home_valuation",               "Do you offer free home valuations for sellers?"),
+        ("listing_process",              "What's involved in listing a home with your team?"),
+        ("time_to_sell",                 "How long does it typically take to sell in your market?"),
+        ("commission_structure",         "How does your commission structure work?"),
+        ("first_time_buyer_help",        "Do you work with first-time buyers and help them understand the process?"),
+        ("investment_properties",        "Do you help with investment properties or multi-family units?"),
+        ("agent_count",                  "How many agents are on your team?"),
+        ("booking_method",               "How do clients get in touch to start the process?"),
+        ("response_time",                "How quickly do you typically respond to inquiries?"),
+        ("social_media_platforms",       "Are you on Zillow, Realtor.com, or social media?"),
+        ("testimonials_reviews",         "Where can clients read reviews or testimonials?"),
+        ("complaint_escalation",         "If a client has a concern during a transaction, who do they contact?"),
+    ],
+
+    "law_firm": [
+        ("practice_areas",               "What types of cases do you handle — personal injury, family law, criminal, estate, business?"),
+        ("consultation_offered",         "Do you offer free or paid consultations?"),
+        ("consultation_cost",            "How much does a consultation cost, if not free?"),
+        ("fee_structure",                "Do you work on contingency, hourly, or flat fee?"),
+        ("case_timeline",                "How long does a typical case take to resolve?"),
+        ("direct_attorney_access",       "Will clients work directly with an attorney or a paralegal?"),
+        ("what_to_bring",                "What documents should a client bring to a consultation?"),
+        ("case_types_not_handled",       "Are there types of cases you refer out?"),
+        ("booking_method",               "How do clients schedule a consultation?"),
+        ("response_time",                "How quickly do you respond to new inquiries?"),
+        ("payment_plans",                "Do you offer payment plans?"),
+        ("languages_spoken",             "Are there languages other than English your team speaks?"),
+        ("social_media_platforms",       "Are you on Google Reviews or legal directories like Avvo?"),
+        ("service_area",                 "Do you serve clients statewide or just locally?"),
+        ("complaint_escalation",         "If a client has a concern about their case handling, what's the process?"),
+    ],
+
+    "insurance": [
+        ("insurance_types",              "What types of insurance do you offer — auto, home, life, health, business, renters?"),
+        ("multi_carrier",                "Can you compare quotes from multiple insurance carriers?"),
+        ("quote_process",                "How does someone get a quote?"),
+        ("bundling_discounts",           "Do you offer discounts for bundling multiple policies?"),
+        ("business_insurance",           "Do you offer commercial or business insurance?"),
+        ("claims_process",               "How does a client file a claim?"),
+        ("review_existing_policy",       "Can you review a client's existing policy to see if they're overpaying?"),
+        ("response_time",                "How quickly do you respond to inquiries?"),
+        ("booking_method",               "How do clients contact an agent?"),
+        ("local_vs_national",            "Are you a local independent agency or affiliated with a national carrier?"),
+        ("payment_options",              "How can clients pay their premiums — monthly, annually, auto-pay?"),
+        ("policy_changes",               "How do clients make changes to an existing policy?"),
+        ("social_media_platforms",       "Are you on Google Reviews?"),
+        ("service_area",                 "What states or areas do you serve?"),
+        ("complaint_escalation",         "If a client has a billing or coverage dispute, what's the process?"),
+    ],
+
+    "photography": [
+        ("services_offered",             "What types of photography do you offer — portraits, weddings, newborns, real estate, headshots, events?"),
+        ("booking_lead_time",            "How far in advance should clients book?"),
+        ("session_duration",             "How long is a typical session?"),
+        ("location_options",             "Do you shoot on-location, in-studio, or both?"),
+        ("deliverables",                 "When will clients receive their photos, and in what format?"),
+        ("editing_style",                "What's your editing style? Do you use presets or custom edit each photo?"),
+        ("prints_albums",                "Do you offer prints, albums, or digital packages?"),
+        ("pricing",                      "What's your pricing structure — packages or à la carte?"),
+        ("booking_method",               "How do clients book a session?"),
+        ("cancellation_policy",          "What's your rescheduling and cancellation policy?"),
+        ("payment_methods",              "What payment methods do you accept? Do you require a deposit?"),
+        ("what_to_wear",                 "Do you offer guidance on what to wear for a session?"),
+        ("social_media_platforms",       "Are you on Instagram? Portfolio visibility is huge for photographers."),
+        ("second_shooter",               "For events or weddings, do you bring a second shooter?"),
+        ("complaint_escalation",         "If a client is unhappy with their photos, what's your process?"),
+    ],
+
+    "event_planner": [
+        ("event_types",                  "What types of events do you plan — weddings, corporate, birthdays, galas, baby showers?"),
+        ("service_tiers",                "Do you offer full-service planning, partial planning, or day-of coordination only?"),
+        ("booking_lead_time",            "How far in advance should clients book?"),
+        ("vendor_management",            "Do you help source and manage vendors — caterers, florists, venues?"),
+        ("budget_management",            "Can you work within a specific budget? How do you handle budget tracking?"),
+        ("packages_pricing",             "What do your packages include, and what's the price range?"),
+        ("consultation_process",         "How does the initial consultation work?"),
+        ("day_of_coordination",          "What's included in day-of coordination?"),
+        ("team_size",                    "How many people are on your team for events?"),
+        ("booking_method",               "How do clients get started?"),
+        ("cancellation_policy",          "What's your cancellation policy if a client needs to postpone or cancel?"),
+        ("payment_methods",              "What payment methods do you accept? Do you require a deposit?"),
+        ("service_area",                 "What areas or venues do you work in?"),
+        ("social_media_platforms",       "Are you on Instagram or Pinterest? Event clients love visual portfolios."),
+        ("complaint_escalation",         "If something goes wrong day-of, how do clients reach you?"),
+    ],
+
+    # ══ CARE GROUP (dark chalk, warm amber accent) ════════════════════════════
+
+    "pet_groomer": [
+        ("services_offered",             "What grooming services do you offer — bath, haircut, nail trim, ear cleaning, de-shedding?"),
+        ("species_serviced",             "Do you groom cats, dogs, or both?"),
+        ("appointment_required",         "Do clients need an appointment or can they walk in?"),
+        ("appointment_duration",         "How long does a grooming appointment typically take?"),
+        ("vaccine_requirements",         "What vaccines are required to bring a pet in?"),
+        ("nail_trim_only",               "Can clients come in for just a nail trim without a full groom?"),
+        ("anxious_senior_pets",          "Do you groom anxious, elderly, or special-needs pets?"),
+        ("size_breed_limitations",       "Are there breeds or sizes you don't groom?"),
+        ("booking_method",               "How do clients book an appointment?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for a standard groom by size?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("drop_off_pick_up",             "Is it a drop-off service, or do clients stay during the groom?"),
+        ("social_media_platforms",       "Are you on Instagram? Pet owners love seeing grooming transformations."),
+        ("complaint_escalation",         "If a pet is nicked or a client is unhappy, what's your process?"),
+    ],
+
+    "dog_trainer": [
+        ("services_offered",             "What training services do you offer — private lessons, group classes, board and train, puppy classes?"),
+        ("training_methods",             "What training methods do you use — positive reinforcement, balanced, clicker?"),
+        ("age_range",                    "What ages do you train — puppies only, or adults too?"),
+        ("behavior_issues",              "Do you work with dogs that have aggression, anxiety, or leash reactivity?"),
+        ("session_duration",             "How long is a typical training session?"),
+        ("package_options",              "Do you sell single sessions or packages?"),
+        ("board_and_train",              "Do you offer board and train programs? How long and what's included?"),
+        ("evaluation_process",           "Do new dogs require an evaluation first?"),
+        ("booking_method",               "How do clients book?"),
+        ("cancellation_policy",          "What's your cancellation policy?"),
+        ("pricing",                      "What's the price range for your main programs?"),
+        ("payment_methods",              "What payment methods do you accept?"),
+        ("service_area_or_location",     "Do you train at clients' homes, at your facility, or both?"),
+        ("social_media_platforms",       "Are you on Instagram? Training transformations perform really well."),
+        ("complaint_escalation",         "If a client doesn't see results, what's your policy?"),
+    ],
+
     # ── GENERIC FALLBACK ─────────────────────────────────────────────────────
     "appointment": [
         ("call_tone_preference",         "How would you describe the tone you want when I answer calls — warm, professional, or somewhere in between?"),
@@ -1017,24 +1547,56 @@ def detect_industry(biz_ctx: dict) -> str:
     vertical = (biz.get("vertical") or "appointment").lower()
 
     mapping = [
-        (["spa", "massage", "facial", "wellness", "beauty", "nail"],                    "spa"),
-        (["salon", "hair", "barber", "stylist", "blowout"],                              "salon"),
-        (["medical", "clinic", "doctor", "physician", "urgent care", "family health"],   "medical"),
-        (["dental", "dentist", "orthodont"],                                              "dental"),
+        # ── Beauty ─────────────────────────────────────────────────────────────
+        (["med spa", "medspa", "botox", "filler", "laser treatment", "microneedling"], "med_spa"),
+        (["massage", "massage studio", "massage therapy"],                              "massage_studio"),
+        (["lash", "lash studio", "eyelash"],                                            "lash_studio"),
+        (["brow studio", "brow bar", "eyebrow", "microblading", "threading"],          "brow_studio"),
+        (["esthetician", "facial studio", "skin care", "skincare studio"],             "esthetician"),
+        (["tanning", "spray tan", "tan salon"],                                         "tanning_salon"),
+        (["tattoo", "tattoo studio", "body art", "piercing"],                           "tattoo_studio"),
+        (["wellness clinic", "acupuncture", "float", "cryotherapy", "iv therapy",
+          "red light therapy", "infrared"],                                              "wellness_clinic"),
+        (["nail salon", "nail studio", "nail bar", "manicure", "pedicure",
+          "gel nails", "acrylic"],                                                       "nail_salon"),
+        (["barber", "barbershop", "barber shop"],                                       "barber"),
+        (["spa", "massage", "facial", "wellness", "beauty"],                            "spa"),
+        (["salon", "hair", "stylist", "blowout"],                                       "salon"),
+        # ── Trades ─────────────────────────────────────────────────────────────
+        (["electrician", "electric", "wiring", "electrical", "panel"],                 "electrician"),
+        (["appliance repair", "appliance", "washer repair", "dryer repair",
+          "fridge repair", "refrigerator repair"],                                       "appliance_repair"),
+        (["garage door", "garage door repair", "garage door install"],                  "garage_door"),
+        (["locksmith", "lock ", "lockout", "rekey", "key duplication"],                "locksmith"),
+        (["pest control", "exterminator", "pest", "termite", "bed bug"],               "pest_control"),
+        (["roofing", "roofer", "roof repair", "roof replacement"],                      "roofing"),
+        (["handyman", "handyman service", "home repair"],                               "handyman"),
+        (["cleaning", "cleaning service", "house cleaning", "maid", "janitorial"],     "cleaning"),
+        (["junk removal", "junk hauling", "trash removal", "debris removal"],           "junk_removal"),
+        (["hvac", "heating", "cooling", "air condition", "furnace"],                   "hvac"),
+        (["plumb", "pipe", "drain", "water heater"],                                   "plumber"),
+        (["auto", "car repair", "vehicle", "mechanic", "auto shop"],                   "auto"),
+        # ── Professional ───────────────────────────────────────────────────────
+        (["dentist", "dental", "orthodont"],                                            "dentist"),
+        (["chiropractor", "chiropractic", "chiro"],                                     "chiropractor"),
+        (["physical therapy", "physiotherapy", "pt clinic", "rehab clinic"],           "physical_therapy"),
+        (["real estate", "realtor", "real estate agent", "real estate office"],        "real_estate"),
+        (["law firm", "attorney", "lawyer", "legal"],                                  "law_firm"),
+        (["insurance", "insurance agency", "insurance broker"],                        "insurance"),
+        (["photography", "photographer", "photo studio"],                               "photography"),
+        (["event planner", "event planning", "wedding planner"],                        "event_planner"),
+        # ── Care ───────────────────────────────────────────────────────────────
+        (["pet groomer", "dog groomer", "pet grooming", "grooming salon"],             "pet_groomer"),
+        (["dog trainer", "dog training", "pet trainer", "puppy training"],             "dog_trainer"),
+        # ── Other existing ─────────────────────────────────────────────────────
+        (["medical", "clinic", "doctor", "physician", "urgent care"],                  "medical"),
         (["computer", "pc repair", "laptop repair", "tech repair", "phone repair",
-          "data recovery", "it support", "computer repair", "cell phone repair"],        "computer_repair"),
-        (["veterinary", "vet ", "animal", "pet"],                                        "veterinary"),
-        (["legal", "law firm", "attorney", "lawyer"],                                    "legal"),
-        (["hvac", "heating", "cooling", "air condition", "furnace"],                     "hvac"),
-        (["plumb", "pipe", "drain", "water heater"],                                     "plumber"),
-        (["electric", "electrician", "wiring", "panel"],                                 "electrician"),
-        (["locksmith", "lock ", "lockout", "key"],                                       "locksmith"),
-        (["hotel", "motel", "resort", "inn", "lodge"],                                   "hotel"),
-        (["gym", "fitness", "crossfit", "yoga", "pilates"],                              "gym"),
-        (["auto", "car", "vehicle", "mechanic", "repair shop", "dealership"],            "auto"),
-        (["web design", "web agency", "website", "digital agency", "officeart",
-          "seo agency", "marketing agency", "branding", "graphic design"],               "web_agency"),
-        (["corporate", "office", "agency", "consulting", "coworking"],                   "corporate"),
+          "it support", "computer repair", "cell phone repair"],                        "computer_repair"),
+        (["veterinary", "vet ", "animal hospital", "animal clinic"],                   "veterinary"),
+        (["hotel", "motel", "resort", "inn", "lodge"],                                 "hotel"),
+        (["gym", "fitness", "crossfit", "yoga", "pilates"],                            "gym"),
+        (["web design", "web agency", "digital agency", "officeart",
+          "seo agency", "marketing agency"],                                             "web_agency"),
     ]
     for keywords, industry_key in mapping:
         if any(k in industry or k in name for k in keywords):
@@ -1523,7 +2085,7 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
   - If URL has a typo (southamtponspa vs southamptonspa): still attempt the scan with what was given. Do not ask them to retype.
   - CRITICAL: Say the paste instruction EXACTLY ONCE. Never repeat it. Never say "Could you paste it again?" — just scan what you received.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
-• NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
+• NAME CONFIRMATION: When someone gives you their name, only spell-check if it's unusual or unclear. For common names (Max, John, Sarah, etc.) just confirm warmly: "Great, Max!" and save. For unusual names, spell it back. Never spell out a clearly common name letter by letter — it sounds robotic. Once confirmed, call save_memory(key="owner_name", value=name).
 • BUSINESS HOURS INPUT: Users can share hours by speaking OR typing in chat. When asking for hours, say: "You can tell me the hours out loud, or paste them here in the chat."
 • TIME FORMAT: ALWAYS say times in 12-hour format with AM/PM. Never say "09:00" — say "9 AM". Never say "18:00" — say "6 PM". Convert any 24-hour stored values to 12-hour when speaking.
 • Search documents or web before admitting ignorance
@@ -1649,7 +2211,7 @@ NEVER say "Please hold on a moment" — this causes you to freeze. If you need t
 NEVER say "let me confirm that for you" then pause — answer immediately with what you know from the dashboard data.
 BUSINESS NAME: The business name is in your system prompt. You know it. Never ask what business the owner manages.
 INTERRUPTIONS: If the user interrupts you mid-sentence, acknowledge what they said and answer their question directly. Don't restart your previous sentence — pivot naturally to what they asked.
-OWNER NAME RULE: When the owner gives their name, ALWAYS spell it back: "Got it — is that spelled M-A-X?" and wait for confirmation before saving. This prevents mishearing errors. Once confirmed, save with save_memory.
+OWNER NAME RULE: When the owner gives their name, only spell it back if it's unusual or you're unsure. For common names (Max, John, Sarah, Mike, etc.) just say "Great, [name]!" and save immediately with save_memory. Never letter-by-letter spell a common name — it sounds unnatural and robotic.
 """
 
     # Onboarding mode — full guided tour script
@@ -3145,8 +3707,22 @@ ONBOARDING RULES:
             if is_url:
                 url = text if text.startswith("http") else "https://" + text
                 logger.info(f"URL detected in chat — scanning: {url}")
+                # Interrupt whatever Aria is currently saying
+                try:
+                    session.interrupt()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)
+                # Inject as a hard user turn so it can't be ignored
                 await session.generate_reply(
-                    instructions=f"The owner just pasted this URL in the chat: {url}. Call scan_website(website_url='{url}') RIGHT NOW. Do not say anything before calling it. After the tool returns, report what you found."
+                    instructions=(
+                        f"STOP. The owner just pasted their website URL: {url}\n"
+                        f"Your ONLY job right now is to say 'Got it, scanning now!' "
+                        f"and immediately call scan_website(website_url='{url}'). "
+                        f"Do not ask for the URL again. Do not say anything else first. "
+                        f"Call the tool NOW."
+                    ),
+                    allow_interruptions=False,
                 )
             else:
                 await session.generate_reply(
@@ -3163,10 +3739,10 @@ ONBOARDING RULES:
             await asyncio.sleep(60)
             try:
                 idle_secs = asyncio.get_event_loop().time() - last_activity["t"]
-                if idle_secs > 120:
+                if idle_secs > 180:   # 3 minutes — give user time to type/think
                     mark_active()
                     await session.generate_reply(
-                        instructions="One short sentence: gently check if they are still there. Maximum 8 words."
+                        instructions="The owner hasn't spoken in a while. Say one warm, short sentence — like 'Take your time, I'm here whenever you're ready.' Maximum 10 words."
                     )
             except Exception as e:
                 logger.debug(f"keepalive tick: {e}")
