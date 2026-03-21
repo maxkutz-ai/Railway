@@ -675,6 +675,339 @@ INDUSTRY_SCRIPTS = {
     },
 }
 
+# ── Deep Dive Question Sets ───────────────────────────────────────────────────
+# 7-8 high-value questions per industry — asked at end of session 1
+# Each maps to a memory_key so answers persist across sessions
+DEEPDIVE_QUESTIONS: dict = {
+    # ── SPA — 25 questions matching client FAQ + owner deep-dive ─────────────
+    "spa": [
+        ("services_offered",             "What services do you offer? I want to be able to describe them accurately to callers."),
+        ("appointment_required",         "Do clients need an appointment, or do you accept walk-ins?"),
+        ("walk_ins_accepted",            "Do you accept walk-ins? And if so, are there times that work better for walk-ins?"),
+        ("how_to_book",                  "How do clients book a spa appointment — phone, website, app, or all of the above?"),
+        ("business_hours",               "What are your hours? You can tell me all at once — like 'Monday through Friday 9 to 7, Saturday 10 to 5, Sunday closed.'"),
+        ("massages_offered",             "Do you offer massages? If so, which types — Swedish, deep tissue, hot stone, sports?"),
+        ("couples_massages",             "Do you offer couples massages? Is there a special room for those?"),
+        ("facials_offered",              "What types of facials do you offer — deep cleansing, anti-aging, hydrating, others?"),
+        ("body_treatments",              "Do you offer body treatments like wraps, scrubs, or detox treatments?"),
+        ("sauna_steam_room",             "Do you have a sauna or steam room available?"),
+        ("waxing_services",              "Do you offer waxing services? If so, which areas?"),
+        ("aromatherapy",                 "Do you offer aromatherapy as part of your treatments or as a standalone service?"),
+        ("what_to_wear",                 "What should clients wear or bring to their appointment?"),
+        ("arrival_time",                 "How early should clients arrive before their appointment?"),
+        ("cancellation_policy",          "What is your cancellation policy? How firm should I be when enforcing it?"),
+        ("packages_memberships",         "Do you offer packages or memberships? What are the main options?"),
+        ("gift_cards",                   "Do you sell gift cards? Any amounts or types I should know about?"),
+        ("sensitive_skin",               "Are your treatments suitable for sensitive skin? Any products or treatments to avoid for certain skin types?"),
+        ("therapist_preference",         "Can clients request a male or female therapist? How should I handle that request?"),
+        ("products_used",                "What products do you use? Any brands clients often ask about?"),
+        ("prenatal_massage",             "Do you offer prenatal massage? Any restrictions or special requirements?"),
+        ("pregnant_clients",             "Can pregnant clients come in for any other treatments — and if so, which ones are safe?"),
+        ("relaxation_area",              "Is there a quiet relaxation area for clients to use before or after their treatment?"),
+        ("private_rooms",                "Do you have private treatment rooms? Do all treatments take place in private?"),
+        ("best_for_first_timers",        "What spa service would you recommend for a first-time client? I get asked this a lot."),
+        # Owner deep-dive
+        ("vip_clients",                  "Do you have any VIP clients or regulars I should always prioritize?"),
+        ("emergency_contact",            "If something urgent comes up while you're with a client, who should I reach out to?"),
+        ("social_media_platforms",       "Which social media are most important right now — Instagram, Facebook, Google?"),
+        ("current_promotions",           "Any current promotions or seasonal specials I should mention to callers?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who should I escalate to?"),
+    ],
+
+    # ── SALON — 25 questions matching client FAQ + owner deep-dive ───────────
+    "salon": [
+        ("services_offered",             "What services do you offer? I want to be able to describe them all accurately — haircuts, color, styling, nails, facials, and anything else."),
+        ("walk_ins_accepted",            "Do you take walk-ins, or is it appointment-only?"),
+        ("appointment_required",         "Do clients need an appointment? And if so, how far in advance should they book?"),
+        ("how_to_book",                  "How can clients book an appointment — by phone, online, app, or all three?"),
+        ("business_hours",               "What are your hours? Tell me all at once — like 'Tuesday through Saturday 9 to 6, closed Sunday and Monday.'"),
+        ("hair_coloring",                "Do you offer hair coloring services? What types — single process, multi-tonal, highlights?"),
+        ("highlights_balayage",          "Do you do highlights or balayage? Any particular techniques your stylists specialize in?"),
+        ("haircuts_all_genders",         "Do you offer haircuts for men, women, and kids?"),
+        ("blowouts_styling",             "Do you offer blowouts and styling services?"),
+        ("bridal_event_hair",            "Do you do bridal or event hair? Do you offer on-location services for events?"),
+        ("makeup_services",              "Do you offer makeup services — for events, weddings, or everyday?"),
+        ("nail_services",                "Do you do nails — manicures, pedicures, nail art?"),
+        ("facials_skincare",             "Do you offer facials or skincare services?"),
+        ("products_used",                "What salon products do you use? Clients often ask about brands."),
+        ("retail_products",              "Do you sell haircare products in the salon?"),
+        ("haircut_frequency",            "How often should clients get a haircut? I want to give good advice when asked."),
+        ("appointment_preparation",      "How should clients prepare for their appointment — anything to do before coming in?"),
+        ("cancellation_policy",          "What is your cancellation policy? How firm should I be when enforcing it?"),
+        ("consultations_offered",        "Do you offer consultations — free or paid — before services like color or extensions?"),
+        ("gift_cards",                   "Do you have gift cards? What amounts or options are available?"),
+        ("package_deals",                "Do you offer package deals or memberships?"),
+        ("parking_available",            "Is parking available nearby? Clients often ask this when booking."),
+        ("curly_hair_specialists",       "Do you have stylists who specialize in curly hair?"),
+        ("hair_extensions",              "Do you do hair extensions? What types — tape-in, sewn, clip-in?"),
+        ("color_correction",             "Can you fix color correction issues? What should a client expect from that process?"),
+        # Owner deep-dive
+        ("stylist_request_handling",     "When a new client asks for a specific stylist who's fully booked, should I offer another stylist or waitlist them?"),
+        ("vip_clients",                  "Are there any VIP clients or long-time regulars I should always prioritize?"),
+        ("social_media_platforms",       "Which social platforms matter most to you — Instagram, Facebook, TikTok, Google?"),
+        ("current_promotions",           "Any current promotions or seasonal specials I should mention to callers?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who should I escalate to?"),
+    ],
+
+    # ── HVAC & PLUMBING — 25 questions ───────────────────────────────────────
+    "hvac": [
+        ("services_offered",             "What services do you offer? I want to be able to describe everything you do — HVAC, plumbing, or both."),
+        ("emergency_service",            "Do you provide emergency service? And what counts as an emergency that gets same-day or after-hours response?"),
+        ("business_hours",               "What are your business hours? And are emergency hours different?"),
+        ("hvac_installation",            "Do you install HVAC systems — full new installations?"),
+        ("heating_repair",               "Do you repair heating systems? Any brands or systems you specialize in or don't work on?"),
+        ("ac_repair",                    "Do you repair air conditioning systems?"),
+        ("seasonal_maintenance",         "Do you offer seasonal maintenance plans or tune-ups?"),
+        ("hvac_service_frequency",       "How often should a homeowner service their HVAC system? I get asked this a lot."),
+        ("air_filter_replacement",       "Do you replace air filters as a service, or do you advise clients on doing it themselves?"),
+        ("thermostat_install",           "Do you install thermostats?"),
+        ("smart_thermostat_install",     "Do you install smart thermostats like Nest or Ecobee?"),
+        ("drain_unclogging",             "Do you unclog drains — sinks, showers, tubs?"),
+        ("pipe_repair",                  "Do you repair leaking or burst pipes?"),
+        ("toilet_sink_faucet",           "Do you fix toilets, sinks, and faucets?"),
+        ("water_heater_service",         "Do you repair or replace water heaters?"),
+        ("tankless_water_heater",        "Do you install tankless water heaters?"),
+        ("sewer_line_inspection",        "Do you offer sewer line inspections?"),
+        ("leak_detection",               "Do you detect hidden leaks — in walls, slabs, or underground?"),
+        ("free_estimates",               "Do you provide free estimates? Or is there a diagnostic fee?"),
+        ("licensed_insured",             "Are you licensed and insured? I want to be able to confirm this confidently when clients ask."),
+        ("financing_available",          "Do you offer financing options for larger jobs?"),
+        ("response_time",                "How quickly can a technician come out for a standard call? And for emergencies?"),
+        ("service_area",                 "What areas do you serve? Any zip codes or cities I should know you don't cover?"),
+        ("work_guarantee",               "Do you guarantee your work? What's the warranty or guarantee policy?"),
+        ("how_to_book",                  "How can clients book service — phone, website, app?"),
+        # Owner deep-dive
+        ("competitor_response",          "If someone says they got a lower quote from a competitor, what should I say?"),
+        ("emergency_dispatch_protocol",  "For no heat in winter or no AC in summer, what's your exact dispatch protocol and target response time?"),
+        ("social_media_platforms",       "Which social platforms matter most — Google, Facebook, Nextdoor?"),
+        ("current_promotions",           "Any current promotions or seasonal specials I should mention?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who should I escalate to?"),
+    ],
+
+    # ── PLUMBER — same as hvac for now ───────────────────────────────────────
+    "plumber": [
+        ("services_offered",             "What plumbing services do you offer? I want to describe everything accurately to callers."),
+        ("emergency_service",            "Do you provide emergency service, including after-hours and weekends?"),
+        ("business_hours",               "What are your regular hours? And do you have a different number or process for after-hours calls?"),
+        ("drain_unclogging",             "Do you unclog drains — sinks, showers, toilets, floor drains?"),
+        ("pipe_repair",                  "Do you repair leaking or burst pipes?"),
+        ("toilet_sink_faucet",           "Do you fix toilets, sinks, and faucets?"),
+        ("water_heater_service",         "Do you repair or replace water heaters?"),
+        ("tankless_water_heater",        "Do you install tankless water heaters?"),
+        ("sewer_line",                   "Do you offer sewer line inspections, cleaning, or replacement?"),
+        ("leak_detection",               "Do you detect hidden leaks?"),
+        ("free_estimates",               "Do you provide free estimates?"),
+        ("service_area",                 "What areas do you serve?"),
+        ("licensed_insured",             "Are you licensed and insured?"),
+        ("response_time",                "How quickly can a plumber come out for a standard call versus an emergency?"),
+        ("how_to_book",                  "How do clients schedule service — phone, website?"),
+        ("work_guarantee",               "Do you guarantee your work?"),
+        ("financing_available",          "Do you offer financing for larger jobs?"),
+        ("pricing_communication",        "When someone asks how much a repair will cost — what should I say?"),
+        ("commercial_residential",       "Do you serve both residential and commercial clients?"),
+        ("emergency_dispatch_protocol",  "For a burst pipe or active flooding, what's my exact protocol and what do I tell the caller to do while they wait?"),
+        ("competitor_response",          "If someone mentions a competitor's lower price, what should I say?"),
+        ("social_media_platforms",       "Which platforms matter most for your business — Google, Facebook, Nextdoor, Yelp?"),
+        ("current_promotions",           "Any current promotions or seasonal offers to mention?"),
+        ("vip_clients",                  "Any clients who always get priority service I should know about?"),
+        ("complaint_escalation",         "If a client has a complaint I can't handle, who do I escalate to?"),
+    ],
+
+    # ── MEDICAL ───────────────────────────────────────────────────────────────
+    "medical": [
+        ("new_patient_intake",           "Walk me through what happens when a brand-new patient calls — what information do I collect and what do I tell them first?"),
+        ("urgent_triage_protocol",       "If a patient calls with chest pain, difficulty breathing, or another emergency — besides 911, what else should I do?"),
+        ("prescription_refill_handling", "How should I handle prescription refill requests — direct to a patient portal, take a message, or something else?"),
+        ("after_hours_protocol",         "For after-hours calls, what should I tell patients? Is there an on-call number, an urgent care nearby?"),
+        ("insurance_verification",       "When a new patient mentions their insurance, should I verify it on the call, or just note it for staff to follow up?"),
+        ("provider_scheduling_prefs",    "Do any of your providers have scheduling preferences — certain days off, or patient types they specialize in?"),
+        ("top_caller_questions",         "What are the top 3 questions callers ask most often? I want to handle those perfectly every time."),
+        ("social_media_platforms",       "Which social platforms matter most — Google, Facebook, Healthgrades?"),
+        ("current_promotions",           "Any wellness programs or seasonal offerings I should mention?"),
+        ("complaint_escalation",         "If a patient has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── DENTAL ────────────────────────────────────────────────────────────────
+    "dental": [
+        ("new_patient_greeting",         "When a nervous new patient calls, what tone and reassurance do you want me to use?"),
+        ("dental_emergency_protocol",    "For dental emergencies like a broken tooth or severe pain, do you always try to fit them in same-day?"),
+        ("insurance_communication",      "When someone asks if you accept their insurance, should I give a direct yes/no, or recommend they call their insurance first?"),
+        ("cancellation_waitlist",        "When someone cancels, should I immediately try to fill the slot from a waitlist? Do you keep one?"),
+        ("payment_options",              "If a patient asks about cost or payment plans, what should I tell them? Any financing I should mention?"),
+        ("recall_approach",              "For patients overdue for a cleaning, should I wait for them to call, or proactively reach out?"),
+        ("what_makes_you_different",     "What do you want patients to know sets your practice apart — technology, comfort, a specialty?"),
+        ("social_media_platforms",       "Which platforms matter most — Google, Facebook, Healthgrades?"),
+        ("current_promotions",           "Any current offers like new patient specials I should mention?"),
+        ("complaint_escalation",         "If a patient has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── LEGAL ─────────────────────────────────────────────────────────────────
+    "legal": [
+        ("intake_screening_questions",   "When a potential new client calls, what 2-3 questions should I always ask to figure out if you can help them?"),
+        ("conflict_check_process",       "How do you handle conflict of interest checks for new callers?"),
+        ("free_consultation_policy",     "Do you offer free consultations? If so, how long, or is there a fee?"),
+        ("urgency_triage",               "If someone calls about a criminal matter or time-sensitive issue — what's the protocol?"),
+        ("topics_to_avoid",              "Are there specific topics I should avoid discussing with callers to protect confidentiality?"),
+        ("attorney_availability",        "When a caller asks to speak directly with an attorney, what's the standard response?"),
+        ("cases_you_dont_handle",        "What types of cases do you NOT take? I want to avoid misleading people."),
+        ("social_media_platforms",       "Which platforms matter most — Google, LinkedIn, Avvo?"),
+        ("current_promotions",           "Any current consultation offers I should mention?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── WEB AGENCY ────────────────────────────────────────────────────────────
+    "web_agency": [
+        ("ideal_client_description",     "Describe your ideal client to me — industry, size, budget range."),
+        ("project_intake_questions",     "When a potential client calls about a new website, what are the first 3 things you want me to find out?"),
+        ("pricing_communication",        "When someone asks how much a website costs — what should I say?"),
+        ("timeline_expectations",        "What's a realistic project timeline? I want to set the right expectations."),
+        ("portfolio_url",                "If someone asks to see your work, what's the best portfolio URL?"),
+        ("current_capacity",             "Are you currently taking on new projects?"),
+        ("follow_up_speed",              "When a lead calls and you're not available, how quickly should they expect a callback?"),
+        ("social_media_platforms",       "Which platforms matter most — LinkedIn, Instagram, Google?"),
+        ("current_promotions",           "Any current offers or packages I should mention?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── HOTEL ─────────────────────────────────────────────────────────────────
+    "hotel": [
+        ("check_in_flexibility",         "What's your standard check-in time, and how flexible are you with early check-in?"),
+        ("room_upgrade_policy",          "If a guest asks for an upgrade, am I authorized to offer one, or should I escalate?"),
+        ("pet_policy",                   "What's your pet policy?"),
+        ("complaint_first_response",     "If a guest calls with a complaint, what's my first move?"),
+        ("group_booking_threshold",      "For group bookings or events, when should I transfer to a sales manager?"),
+        ("top_local_recommendations",    "What are your top 3 local restaurant or attraction recommendations for guests?"),
+        ("cancellation_policy_exact",    "Walk me through your cancellation policy exactly."),
+        ("social_media_platforms",       "Which platforms matter most — Google, TripAdvisor, Instagram?"),
+        ("current_promotions",           "Any current packages or seasonal offers to mention?"),
+        ("complaint_escalation",         "If a guest has a serious complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── GYM ───────────────────────────────────────────────────────────────────
+    "gym": [
+        ("membership_options_pricing",   "Walk me through your membership options and pricing."),
+        ("free_trial_details",           "Do you offer free trials or guest passes?"),
+        ("class_booking_process",        "How do members book classes?"),
+        ("cancellation_process",         "What's the process if a member wants to cancel or pause their membership?"),
+        ("personal_training_pitch",      "Do you offer personal training? What should I tell someone interested?"),
+        ("peak_hours_advice",            "What are your busiest times? If a caller asks when it's least crowded?"),
+        ("what_makes_you_different",     "What's your pitch — why should someone choose your gym over competitors?"),
+        ("social_media_platforms",       "Which platforms matter most — Instagram, Facebook, Google?"),
+        ("current_promotions",           "Any current membership deals or promotions?"),
+        ("complaint_escalation",         "If a member has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── AUTO ──────────────────────────────────────────────────────────────────
+    "auto": [
+        ("drop_off_process",             "Walk me through what happens when a customer brings their car in."),
+        ("loaner_car_availability",      "Do you offer loaner cars or a shuttle service?"),
+        ("estimate_over_phone",          "Can I give ballpark cost estimates over the phone?"),
+        ("warranty_on_work",             "What warranty do you offer on your work?"),
+        ("urgent_safety_protocol",       "If someone calls with a safety concern — like bad brakes — how urgently should I treat that?"),
+        ("parts_preference",             "Do you use OEM parts, aftermarket, or both?"),
+        ("busy_season_expectations",     "When are your busiest periods?"),
+        ("social_media_platforms",       "Which platforms matter most — Google, Yelp, Facebook?"),
+        ("current_promotions",           "Any current service specials or promotions?"),
+        ("complaint_escalation",         "If a customer has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── VET ───────────────────────────────────────────────────────────────────
+    "veterinary": [
+        ("new_patient_intake_info",      "What information do I need from a new client calling to register their pet?"),
+        ("pet_emergency_protocol",       "If someone calls panicked about their pet, what's my exact protocol?"),
+        ("after_hours_emergency_referral","For after-hours emergencies, is there a 24-hour emergency vet you refer to?"),
+        ("species_scope",                "Besides dogs and cats, do you treat other animals?"),
+        ("prescription_refill_process",  "How should I handle prescription refill calls?"),
+        ("sensitive_call_handling",      "If a client calls in distress about a very sick or just-lost pet, how should I handle that?"),
+        ("what_makes_you_different",     "What do pet owners most appreciate about your practice?"),
+        ("social_media_platforms",       "Which platforms matter most — Google, Facebook, Yelp?"),
+        ("current_promotions",           "Any wellness specials or seasonal promotions?"),
+        ("complaint_escalation",         "If a client has a complaint I can't resolve, who do I escalate to?"),
+    ],
+
+    # ── COMPUTER REPAIR ───────────────────────────────────────────────────────
+    "computer_repair": [
+        ("repair_turnaround_time",       "What's your typical turnaround time for most repairs?"),
+        ("drop_off_or_mail_in",          "Do you accept mail-in repairs, or is it drop-off only? Do you offer on-site service?"),
+        ("diagnostic_fee_policy",        "Do you charge a diagnostic fee? Is it waived if they proceed with the repair?"),
+        ("data_backup_policy",           "What do you tell customers about their data before a repair — do you back it up?"),
+        ("warranty_on_repairs",          "What warranty do you offer on repairs?"),
+        ("brands_and_devices_serviced",  "What brands and device types do you service — PCs, Macs, phones, tablets?"),
+        ("parts_sourcing",               "Do you use OEM parts, third-party, or refurbished?"),
+        ("online_reputation_focus",      "Do you actively use Google Reviews or Yelp? I can remind clients to leave a review after a good experience."),
+        ("referral_program",             "Do you have a referral program or current promotions?"),
+        ("complaint_escalation",         "If a caller has a complex question or complaint I can't resolve, who should I direct them to?"),
+    ],
+
+    # ── GENERAL BUSINESS Q&A — 20 universal questions every client asks ────────
+    # Aria asks the owner so she knows how to answer when clients call/visit
+    "general_business": [
+        ("services_offered",             "What services do you offer? I want to describe them accurately every time a client asks."),
+        ("business_hours",               "What are your business hours? You can tell me all at once — like 'Monday through Friday 9 to 6, Saturday 10 to 4, Sunday closed.'"),
+        ("location_address",             "Where are you located? Full address so I can direct clients accurately."),
+        ("appointment_required",         "Do clients need an appointment, or can they walk in?"),
+        ("walk_ins_accepted",            "Do you accept walk-ins? And if so, are there better times for walk-ins?"),
+        ("how_to_book",                  "How do clients book a service — phone, website, app, or all of the above?"),
+        ("contact_methods",              "How can clients contact you — phone, email, text, social media? What's the best way?"),
+        ("free_estimates",               "Do you offer free estimates? If so, how does someone request one?"),
+        ("service_area",                 "What areas do you serve? Any zip codes or cities I should know you don't cover?"),
+        ("same_day_service",             "Do you offer same-day service? If so, how does a client request it?"),
+        ("cancellation_policy",          "What's your cancellation policy? How much notice is needed and is there a fee?"),
+        ("payment_methods",              "What payment methods do you accept — cash, card, Venmo, Zelle, financing?"),
+        ("financing_available",          "Do you offer financing options for larger purchases or services?"),
+        ("gift_cards",                   "Do you have gift cards? What amounts are available and how can someone buy one?"),
+        ("discounts_promotions",         "Do you offer any discounts or promotions — first-time clients, referrals, seasonal?"),
+        ("licensed_insured",             "Are you licensed and insured? I want to be able to confirm this confidently when clients ask."),
+        ("service_duration",             "How long do your services typically take? I get asked this a lot when clients are planning their day."),
+        ("warranties_guarantees",        "Do you provide warranties or guarantees on your work or services?"),
+        ("parking_available",            "Is parking available at your location? Any details clients should know?"),
+        ("speak_before_booking",         "Can clients speak with someone before booking — a consultation call or quick chat?"),
+    ],
+
+    # ── GENERAL WEBSITE Q&A — 20 questions about your online presence ──────────
+    # Aria asks the owner so she can guide clients to the right online resources
+    "general_website": [
+        ("online_booking_url",           "How do clients book online? Is there a direct booking link I can direct them to?"),
+        ("services_page_url",            "Where can clients see all your services online — is there a specific page URL or section?"),
+        ("pricing_page",                 "Where can clients find your pricing online? Or is pricing only available by request?"),
+        ("quote_request_process",        "Can clients request a quote online? If so, how — a form, email, or chat?"),
+        ("contact_form_available",       "Do you have a contact form on your website? What happens after someone submits it?"),
+        ("phone_email_on_website",       "Where on your website can clients find your phone number and email? I want to confirm it's easy to find."),
+        ("live_chat_available",          "Is there a live chat or chatbot on your website? Or just the phone number?"),
+        ("portfolio_gallery_url",        "Where can clients view your portfolio or gallery of past work? Any specific URL or page?"),
+        ("reviews_page",                 "Where can clients read reviews — Google, Yelp, a testimonials page on your site?"),
+        ("faq_page",                     "Do you have a FAQ page on your website? What are the most common questions it covers?"),
+        ("online_store",                 "Can clients buy products online through your website?"),
+        ("order_appointment_tracking",   "Can clients track their order or appointment status online? If so, how?"),
+        ("account_creation",             "Can clients create an account on your website? What features does that give them?"),
+        ("password_reset_process",       "How do clients reset their password if they forget it?"),
+        ("payment_security",             "Is payment on your website secure? Any trust badges or security features I should mention?"),
+        ("online_support_channel",       "Do you offer online support — live chat, email ticket, support page?"),
+        ("file_upload_capability",       "Can clients upload files or photos through your website — for quotes, consultations, etc.?"),
+        ("mobile_friendly_confirmed",    "Is your website mobile-friendly? I sometimes get asked if it works on phones."),
+        ("newsletter_signup",            "How do clients sign up for your newsletter or updates? Is there a signup form?"),
+        ("about_page_details",           "Where can clients learn more about your company — your story, team, values? Any specific page?"),
+    ],
+
+    # ── GENERIC FALLBACK ─────────────────────────────────────────────────────
+    "appointment": [
+        ("call_tone_preference",         "How would you describe the tone you want when I answer calls — warm, professional, or somewhere in between?"),
+        ("top_caller_questions",         "What are the top 3 things clients call about most often?"),
+        ("difficult_client_approach",    "If a caller is upset or demanding, what's your preferred approach — accommodate, escalate, or hold firm?"),
+        ("vip_clients",                  "Are there any clients who always get priority or special treatment?"),
+        ("after_hours_protocol",         "For after-hours calls, what should people hear and what should they leave as a message?"),
+        ("what_makes_you_different",     "What sets you apart from competitors? I'll use that when people ask."),
+        ("urgent_vs_routine",            "How do I tell the difference between a genuinely urgent request and a routine one?"),
+        ("social_media_platforms",       "Which social media platforms are most important to your business?"),
+        ("online_review_strategy",       "Do you actively ask clients for Google or Yelp reviews?"),
+        ("current_promotions",           "Any current promotions or seasonal offers I should mention?"),
+        ("referral_program",             "Do you have a referral program?"),
+        ("team_escalation_contact",      "If a client has a complaint I can't resolve, who's the best person to escalate to?"),
+        ("feedback_channel_preference",  "How do you prefer to receive updates from me — AI Video, text, email, or all of the above?"),
+    ],
+}
+
+
 def detect_industry(biz_ctx: dict) -> str:
     """Detect business industry from context."""
     biz      = biz_ctx.get("business", {})
@@ -688,6 +1021,8 @@ def detect_industry(biz_ctx: dict) -> str:
         (["salon", "hair", "barber", "stylist", "blowout"],                              "salon"),
         (["medical", "clinic", "doctor", "physician", "urgent care", "family health"],   "medical"),
         (["dental", "dentist", "orthodont"],                                              "dental"),
+        (["computer", "pc repair", "laptop repair", "tech repair", "phone repair",
+          "data recovery", "it support", "computer repair", "cell phone repair"],        "computer_repair"),
         (["veterinary", "vet ", "animal", "pet"],                                        "veterinary"),
         (["legal", "law firm", "attorney", "lawyer"],                                    "legal"),
         (["hvac", "heating", "cooling", "air condition", "furnace"],                     "hvac"),
@@ -783,16 +1118,41 @@ def _build_session_block(biz_ctx: dict, video_count: int, industry_key: str, ind
 
     if video_count == 0:
         # ── SESSION 1 — First ever session ────────────────────────────────────
-        lines.append("THIS IS THE FIRST SESSION. Work through this flow:")
-        lines.append("1. Greet warmly. Ask their name. Spell it back. Save with save_memory(key='owner_first_name', category='owner_info').")
-        lines.append("2. Ask: 'What kind of business do you run?' Save with save_memory(key='business_type_description', category='business_rule').")
-        lines.append(f"3. Say: 'I'm configured for {industry_key.replace('_',' ')} businesses — let me ask a few quick questions so I can help your clients effectively.'")
-        lines.append("4. Work through these setup questions ONE AT A TIME — ask, wait for full answer, save, then move to next:")
+        # Check what's already known so we don't ask redundant questions
+        known_name     = any("owner_first_name" in m for m in memories)
+        known_biz_type = any("business_type" in m for m in memories)
+        known_hours    = any("business_hours" in m or "hours" in m for m in memories)
+        known_services = len(svcs) > 0
+
+        lines.append("THIS IS THE FIRST SESSION. Warmly introduce yourself, then work through this flow:")
+        lines.append("GREETING: 'Good [morning/afternoon/evening]! I'm so glad you're here. I'm Aria, your AI receptionist — I'll be handling your calls, bookings, and messages 24/7. How are you doing today?' Wait for answer, respond warmly.")
+        if not known_name:
+            lines.append("ASK NAME: 'And what's your name? I'd love to know who I'm working with.' Spell it back, save with save_memory(key='owner_first_name', category='owner_info').")
+        else:
+            lines.append("NAME: Already known — greet them by name warmly.")
+        if not known_biz_type:
+            lines.append("ASK BUSINESS TYPE: 'Tell me a little about your business — what do you do?' Save with save_memory(key='business_type_description', category='business_rule').")
+        else:
+            lines.append(f"BUSINESS TYPE: Already known — acknowledge it naturally.")
+        lines.append(f"SETUP: 'I'm set up for {industry_key.replace('_',' ')} businesses. I have a couple of quick questions so I can serve your clients perfectly — this'll just take a minute!'")
         for i, (key, question) in enumerate(setup_qs[:3], 1):
-            lines.append(f"   Q{i}: \"{question}\" → save_memory(key='{key}', category='business_rule')")
-        lines.append("5. After setup questions, offer website scan: 'Do you have a website? I can scan it to learn your services and hours automatically.' If yes → call request_website_url(). If no → skip.")
-        lines.append("6. Offer dashboard tour: 'Want me to walk you through the main sections of your dashboard?'")
-        lines.append("CRITICAL: ONE question at a time. Wait for full answer before asking the next one.")
+            if key == "business_hours" and known_hours:
+                lines.append(f"   Q{i} SKIP: hours already saved — don't ask")
+                continue
+            if key == "services_with_prices" and known_services:
+                lines.append(f"   Q{i} SKIP: services already saved — don't ask")
+                continue
+            # Improve hours collection question
+            if key == "business_hours":
+                lines.append(f"   Q{i}: 'What are your business hours? You can say them all at once — like \"Monday through Friday 9 to 6, Saturday 10 to 4, Sunday closed\" — or type them in the chat below if that's easier.' → save_memory(key='business_hours', category='business_rule'). DO NOT ask one day at a time. Accept the full hours in one answer.")
+            else:
+                lines.append(f"   Q{i}: \"{question}\" → save_memory(key='{key}', category='business_rule')")
+        lines.append("WEBSITE: 'Do you have a website? I can scan it right now to pull in your services, pricing, and hours automatically — it takes about 30 seconds.' If yes → call request_website_url(). If no → skip.")
+        lines.append("END / DEEP DIVE OFFER: After setup is done, say: 'Before we wrap up — I have about 7 quick questions that would really help me serve your clients better. Things like how you like calls handled, your most important clients, and what makes [business name] special. We can go through them right now — it takes about 10 minutes — or I can set up a dedicated session for another time and send you a reminder. What works better for you?'")
+        lines.append("  IF NOW → Call get_deepdive_questions() to get the question list, then ask them ONE AT A TIME, save each answer.")
+        lines.append("  IF LATER → Call schedule_deepdive_session() to create a Cal.com booking. Say: 'Done! I've set up a session for us — you'll get a confirmation and I'll remind you the day before.'")
+        lines.append("  IF REMIND ME → Call save_memory(key='deepdive_reminder_requested', value='true', category='system'). Say: 'Got it — I'll bring it up next time we talk.'")
+        lines.append("CRITICAL: ONE question at a time. Wait for full answer. Be warm, curious, genuinely interested in their business. Don't rush.")
 
     elif video_count in (1, 2):
         # ── SESSION 2-3 — Follow-up, give briefing + fill gaps ────────────────
@@ -812,6 +1172,27 @@ def _build_session_block(biz_ctx: dict, video_count: int, industry_key: str, ind
         if done:
             lines.append(f"ALREADY CONFIGURED: {', '.join(done)}")
 
+        # Deep dive check
+        deepdive_done      = any("deepdive_complete"   in m.get("memory_key","") for m in memories)
+        deepdive_scheduled = any("deepdive_scheduled"  in m.get("memory_key","") for m in memories)
+        deepdive_paused    = any("deepdive_paused"     in m.get("memory_key","") for m in memories)
+        deepdive_requested = any("deepdive_reminder_requested" in m.get("memory_key","") for m in memories)
+        if not deepdive_done:
+            if deepdive_paused:
+                lines.append("DEEP DIVE RESUMING: Owner paused last session. At a natural moment say: 'By the way — last time we paused your Q&A session. Want to continue where we left off? I'll show you your progress on the board, and you can skip any question you're not ready for.' → If yes: get_deepdive_questions(). If schedule: schedule_deepdive_session().")
+            elif deepdive_requested:
+                lines.append("DEEP DIVE REMINDER: Owner asked to be reminded. At a natural pause say: 'You mentioned wanting to go through the onboarding Q&A — want to do some now? You can skip any questions and split them over sessions.' → If now: get_deepdive_questions(). If schedule: schedule_deepdive_session().")
+            elif not deepdive_scheduled:
+                lines.append("DEEP DIVE OFFER: If there's a natural pause, mention: 'I have a set of questions about your business that really help me serve your clients — things like your services, booking process, hours, and what makes you special. We can do just a few today and save the rest for later, skip anything you prefer, or schedule a dedicated session. Interested?'")
+        elif deepdive_scheduled:
+            lines.append("DEEP DIVE SCHEDULED: Already booked — mention it warmly if relevant.")
+        else:
+            # Industry deep dive complete — offer general Q&A next
+            general_biz_done = any("online_booking_url" in m.get("memory_key","") or "payment_methods" in m.get("memory_key","") for m in memories)
+            general_web_done = any("services_page_url" in m.get("memory_key","") or "mobile_friendly_confirmed" in m.get("memory_key","") for m in memories)
+            if not general_biz_done or not general_web_done:
+                lines.append(f"GENERAL Q&A AVAILABLE: Industry deep dive is complete. At a natural moment offer: 'I also have a{'' if general_biz_done else ' General Business Q&A'}{' and' if not general_biz_done and not general_web_done else ''}{'' if general_web_done else ' General Website Q&A'} — questions that help me answer what most clients ask. Want to go through{' it' if general_biz_done or general_web_done else ' either one'}?' → Business: get_general_qa_questions('business'). Website: get_general_qa_questions('website').")
+
     else:
         # ── SESSION 4+ — Established, lead with briefing ──────────────────────
         lines.append(f"SESSION {video_count + 1} — established relationship. Open with a 1-sentence briefing, then ask what they need.")
@@ -824,10 +1205,20 @@ def _build_session_block(biz_ctx: dict, video_count: int, industry_key: str, ind
         if missing:
             lines.append(f"Still unconfigured: {', '.join(missing)} — mention only if it comes up naturally.")
 
+        # Deep dive check for session 4+
+        deepdive_done      = any("deepdive_complete" in m.get("memory_key","") for m in memories)
+        deepdive_scheduled = any("deepdive_scheduled" in m.get("memory_key","") for m in memories)
+        deepdive_paused    = any("deepdive_paused"   in m.get("memory_key","") for m in memories)
+        if not deepdive_done and not deepdive_scheduled:
+            if deepdive_paused:
+                lines.append("DEEP DIVE PAUSED: Resume offer — say: 'Still have some unanswered Q&A questions from last time — want to chip away at a few more today?' → get_deepdive_questions() or schedule_deepdive_session().")
+            else:
+                lines.append("DEEP DIVE PENDING: If conversation is relaxed, offer: 'I'd still love to go through those business Q&A questions when you have a moment — even just 3 or 4 today would help me serve your clients better.' → get_deepdive_questions() or schedule_deepdive_session().")
+
     return "\n".join(lines)
 
 
-def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
+def build_system_prompt(biz_ctx: dict, memories: list, location: str, video_count: int = 0) -> str:
     now  = datetime.now()
     time_str = now.strftime("%-I:%M %p")
     date_str = now.strftime("%A, %B %-d, %Y")
@@ -901,23 +1292,7 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
 
     mem_text = "\n".join(m[:150] for m in memories[:20]) if memories else "Nothing saved yet."
 
-    # Track video session count (for onboarding)
-    video_count = 0
-    try:
-        sb_vc = get_supabase()
-        if sb_vc and business_id:
-            vc_res = sb_vc.from_("ai_memory").select("memory_value").eq("business_id", business_id).eq("memory_key", "aria_video_count").limit(1).execute()
-            if vc_res.data:
-                video_count = int(vc_res.data[0]["memory_value"] or 0)
-            new_count = video_count + 1
-            sb_vc.from_("ai_memory").upsert({
-                "business_id": business_id, "category": "system",
-                "memory_key": "aria_video_count", "memory_value": str(new_count),
-                "created_at": datetime.now().isoformat()
-            }, on_conflict="business_id,memory_key").execute()
-    except: pass
-
-    # Load scanned knowledge from ai_memory (where /api/knowledge/ingest saves)
+    loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
     kb_text = ""
     try:
         sb_kb = get_supabase()
@@ -927,7 +1302,6 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str) -> str:
                 snippets = [f"{r['memory_key']}: {r['memory_value'][:200]}" for r in kb_res.data if r.get("memory_value")]
                 kb_text = "\n".join(snippets[:5])
     except: pass
-    loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
 
     industry_key    = detect_industry(biz_ctx)
     industry_script = INDUSTRY_SCRIPTS.get(industry_key, INDUSTRY_SCRIPTS["appointment"])
@@ -1203,7 +1577,25 @@ async def entrypoint(ctx: JobContext):
     if biz_ctx.get("business", {}).get("name"):
         business_name = biz_ctx["business"]["name"]
 
-    instructions = build_system_prompt(biz_ctx, memories, location)
+    # ── Compute video_count at entrypoint level so closures can access it ────
+    video_count = 0
+    try:
+        sb_vc = get_supabase()
+        if sb_vc and business_id:
+            vc_res = sb_vc.from_("ai_memory").select("memory_value") \
+                .eq("business_id", business_id).eq("memory_key", "aria_video_count").limit(1).execute()
+            if vc_res.data:
+                video_count = int(vc_res.data[0]["memory_value"] or 0)
+            # Increment for this session
+            sb_vc.from_("ai_memory").upsert({
+                "business_id": business_id, "category": "system",
+                "memory_key": "aria_video_count", "memory_value": str(video_count + 1),
+            }, on_conflict="business_id,memory_key").execute()
+            logger.info(f"Video session #{video_count + 1} for {business_name}")
+    except Exception as e:
+        logger.warning(f"video_count load failed: {e}")
+
+    instructions = build_system_prompt(biz_ctx, memories, location, video_count)
 
     # Check if in onboarding mode
     is_onboarding = "ONBOARDING_MODE" in dashboard_ctx if dashboard_ctx else False
@@ -1431,6 +1823,421 @@ ONBOARDING RULES:
         except Exception as e:
             logger.warning(f"complete_onboarding_chapter error: {e}")
             return "Chapter progress noted."
+
+    @function_tool
+    async def get_deepdive_questions(ctx: RunContext) -> str:
+        """Get the deep-dive question list. Call when owner agrees to do the Q&A now.
+        Publishes the question list to the whiteboard via LiveKit.
+        Checks for partially-completed previous sessions and resumes from where they left off.
+        After calling: use deepdive_ask_question(index) before each question,
+        save_memory() after each answer, deepdive_mark_answered(index) to check it off.
+        Owner can say 'skip' at any time — call deepdive_skip_question(index) to skip it.
+        """
+        import json as _json
+        questions = DEEPDIVE_QUESTIONS.get(industry_key, DEEPDIVE_QUESTIONS["appointment"])
+
+        # Load any previously answered questions from ai_memory
+        answered_keys = set()
+        skipped_keys  = set()
+        previous_answers: list = []
+        try:
+            sb_dd = get_supabase()
+            if sb_dd and business_id:
+                # Get all deepdive progress keys
+                prog = sb_dd.from_("ai_memory").select("memory_key,memory_value,category") \
+                    .eq("business_id", business_id).execute()
+                answered_keys = {
+                    r["memory_key"] for r in (prog.data or [])
+                    if r.get("category") == "business_rule"
+                    and any(r["memory_key"] == k for k, _ in questions)
+                }
+                skipped_keys = {
+                    r["memory_value"].replace("SKIPPED:", "").strip()
+                    for r in (prog.data or [])
+                    if r.get("memory_key") == "deepdive_skipped_keys"
+                }
+                previous_answers = [
+                    {"key": r["memory_key"], "value": r["memory_value"]}
+                    for r in (prog.data or [])
+                    if r.get("category") == "business_rule"
+                    and any(r["memory_key"] == k for k, _ in questions)
+                ]
+        except Exception as e:
+            logger.warning(f"Failed to load deepdive progress: {e}")
+
+        # Build question list with answered/skipped state
+        questions_payload = [
+            {
+                "key":      k,
+                "question": q,
+                "answered": k in answered_keys,
+                "skipped":  k in skipped_keys,
+                "answer":   next((a["value"] for a in previous_answers if a["key"] == k), ""),
+            }
+            for k, q in questions
+        ]
+
+        # Publish whiteboard start event
+        try:
+            payload = _json.dumps({
+                "type":      "deepdive_start",
+                "company":   business_name,
+                "industry":  industry_key,
+                "questions": questions_payload,
+            }).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"Deepdive whiteboard publish failed: {e}")
+
+        # Find first unanswered/unskipped question index for resuming
+        resume_from = 0
+        for i, q in enumerate(questions_payload):
+            if not q["answered"] and not q["skipped"]:
+                resume_from = i
+                break
+
+        n_answered = len(answered_keys)
+        n_skipped  = len(skipped_keys)
+        n_total    = len(questions)
+        is_resuming = n_answered > 0 or n_skipped > 0
+
+        lines = []
+        if is_resuming:
+            lines.append(f"RESUMING DEEP DIVE: {n_answered} already answered, {n_skipped} skipped, {n_total - n_answered - n_skipped} remaining.")
+            lines.append(f"SAY: 'Great — I've loaded your progress. You answered {n_answered} question{'s' if n_answered != 1 else ''} last time. Let me pick up from where we left off — starting with question {resume_from + 1}.'")
+        else:
+            lines.append(f"STARTING DEEP DIVE: {n_total} questions for {industry_key.replace('_',' ').title()}.")
+            lines.append("SAY: 'I have your questions ready on the board. We'll go one at a time. Any time you want to skip a question, just say skip and we'll come back to it later. Ready?'")
+
+        lines.append("")
+        lines.append(f"START FROM QUESTION INDEX {resume_from} (0-based).")
+        lines.append("WORKFLOW FOR EACH QUESTION:")
+        lines.append("  1. Call deepdive_ask_question(index=N)")
+        lines.append("  2. Ask the question")
+        lines.append("  3a. If they answer → save_memory(key, value, 'business_rule') + deepdive_mark_answered(N)")
+        lines.append("  3b. If they say 'skip' → call deepdive_skip_question(N) + move to N+1")
+        lines.append("  3c. If they say 'done for now'/'finish later' → call deepdive_pause() to save progress")
+        lines.append("  4. Move to next unanswered question")
+        lines.append("After ALL done: call deepdive_complete()")
+        lines.append("")
+
+        for i, q in enumerate(questions_payload):
+            status = "✓ answered" if q["answered"] else ("— skipped" if q["skipped"] else "→ pending")
+            lines.append(f"Q{i+1} [{status}] key='{q['key']}': {q['question']}")
+
+        return "\n".join(lines)
+
+    @function_tool
+    async def deepdive_skip_question(ctx: RunContext, index: int) -> str:
+        """Skip a deep dive question the owner doesn't want to answer right now.
+        Call when owner says 'skip', 'next', 'pass', or 'come back to that'.
+        The question stays on the board marked as skipped (grey), not answered.
+        Skipped questions will be offered again in the next session.
+        index: 0-based question index
+        """
+        import json as _json
+        questions = DEEPDIVE_QUESTIONS.get(industry_key, DEEPDIVE_QUESTIONS["appointment"])
+
+        # Save skipped state
+        try:
+            sb = get_supabase()
+            if sb and business_id and index < len(questions):
+                key, _ = questions[index]
+                # Append this key to the skipped list
+                existing = sb.from_("ai_memory").select("memory_value") \
+                    .eq("business_id", business_id).eq("memory_key", "deepdive_skipped_keys").execute()
+                existing_val = existing.data[0]["memory_value"] if existing.data else ""
+                skipped_list = set(existing_val.split(",")) if existing_val else set()
+                skipped_list.add(key)
+                sb.from_("ai_memory").upsert({
+                    "business_id": business_id,
+                    "category":    "system",
+                    "memory_key":  "deepdive_skipped_keys",
+                    "memory_value": ",".join(filter(None, skipped_list)),
+                }, on_conflict="business_id,memory_key").execute()
+        except Exception as e:
+            logger.warning(f"deepdive_skip_question save failed: {e}")
+
+        # Publish skip event to whiteboard
+        try:
+            payload = _json.dumps({"type": "deepdive_skipped", "index": index}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"deepdive_skip publish failed: {e}")
+
+        return f"Question {index + 1} skipped. Moving to next question."
+
+    @function_tool
+    async def deepdive_pause(ctx: RunContext) -> str:
+        """Pause the deep dive session — owner wants to continue in a later session.
+        Call when owner says 'let's stop here', 'done for today', 'continue next time', etc.
+        Saves progress so Aria can resume exactly where they left off.
+        After calling, offer to schedule the next session with schedule_deepdive_session().
+        """
+        import json as _json
+        questions = DEEPDIVE_QUESTIONS.get(industry_key, DEEPDIVE_QUESTIONS["appointment"])
+
+        try:
+            sb = get_supabase()
+            if sb and business_id:
+                sb.from_("ai_memory").upsert({
+                    "business_id": business_id,
+                    "category":    "system",
+                    "memory_key":  "deepdive_paused",
+                    "memory_value": f"paused on {datetime.now().strftime('%b %-d, %Y')}",
+                }, on_conflict="business_id,memory_key").execute()
+        except Exception as e:
+            logger.warning(f"deepdive_pause save failed: {e}")
+
+        # Close the whiteboard
+        try:
+            payload = _json.dumps({"type": "deepdive_end", "paused": True}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"deepdive_pause publish failed: {e}")
+
+        return (
+            "Deep dive paused. Progress saved — we'll pick up exactly where we left off next session. "
+            "Would you like to schedule a dedicated Q&A session on your calendar?"
+        )
+        import json as _json
+        questions = DEEPDIVE_QUESTIONS.get(industry_key, DEEPDIVE_QUESTIONS["appointment"])
+
+        # Publish whiteboard start event via LiveKit
+        try:
+            payload = _json.dumps({
+                "type": "deepdive_start",
+                "company": business_name,
+                "questions": [{"key": k, "question": q} for k, q in questions],
+            }).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"Deepdive whiteboard started: {len(questions)} questions for {industry_key}")
+        except Exception as e:
+            logger.warning(f"Deepdive whiteboard publish failed: {e}")
+
+        lines = [f"DEEP DIVE QUESTIONS for {industry_key.replace('_',' ').title()} ({len(questions)} questions) — ask ONE AT A TIME:"]
+        for i, (key, question) in enumerate(questions):
+            lines.append(f"Q{i+1}. key='{key}': {question}")
+        lines.append("")
+        lines.append("WORKFLOW FOR EACH QUESTION:")
+        lines.append("  1. Call deepdive_ask_question(index=N) to highlight it on the board")
+        lines.append("  2. Ask the question out loud")
+        lines.append("  3. Wait for full answer")
+        lines.append("  4. Call save_memory(key='{key}', value='their answer', category='business_rule')")
+        lines.append("  5. Call deepdive_mark_answered(index=N) to check it off on the board")
+        lines.append("  6. Move to next question")
+        lines.append("")
+        lines.append("After ALL questions: Call deepdive_complete() and say: 'Perfect — I've saved everything. I'll use all of this every single time I talk to your clients. You're going to love how well I represent your business.'")
+        lines.append("IMPORTANT: Do NOT ask all questions at once. One at a time.")
+        return "\n".join(lines)
+
+    @function_tool
+    async def deepdive_ask_question(ctx: RunContext, index: int) -> str:
+        """Highlight a specific question on the whiteboard before asking it.
+        Call this BEFORE asking each question so the board shows which one is active.
+        index: 0-based question index (0 = first question)
+        """
+        import json as _json
+        try:
+            payload = _json.dumps({"type": "deepdive_question", "index": index}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"deepdive_ask_question publish failed: {e}")
+        return f"Question {index + 1} highlighted on the board."
+
+    @function_tool
+    async def deepdive_mark_answered(ctx: RunContext, index: int) -> str:
+        """Check off a question as answered on the whiteboard.
+        Call this AFTER the owner has answered a question and you've saved the answer.
+        index: 0-based question index
+        """
+        import json as _json
+        try:
+            payload = _json.dumps({"type": "deepdive_answered", "index": index}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"deepdive_mark_answered publish failed: {e}")
+        return f"Question {index + 1} checked off as answered."
+
+    @function_tool
+    async def repeat_deepdive_question(ctx: RunContext, question_number: int = 0) -> str:
+        """Repeat or redo a deep dive question the owner wants to answer again.
+        Use when owner says things like:
+          "repeat last question" → question_number = current - 1
+          "redo question 3" → question_number = 3
+          "let me answer that again" → question_number = current
+          "go back to question 2" → question_number = 2
+        question_number: 1-based (1 = first question). Use 0 to mean "last question asked".
+        After calling: Un-checks the question on the board and re-asks it.
+        """
+        import json as _json
+        idx = max(0, (question_number - 1) if question_number > 0 else 0)
+        try:
+            payload = _json.dumps({"type": "deepdive_redo", "index": idx}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"Deepdive redo question {idx + 1}")
+        except Exception as e:
+            logger.warning(f"repeat_deepdive_question publish failed: {e}")
+        questions = DEEPDIVE_QUESTIONS.get(industry_key, DEEPDIVE_QUESTIONS["appointment"])
+        if idx < len(questions):
+            _, question_text = questions[idx]
+            return f"Going back to question {idx + 1}: {question_text}"
+        return f"Repeating question {idx + 1}."
+
+    @function_tool
+    async def deepdive_complete(ctx: RunContext) -> str:
+        """Call this after ALL deep dive questions have been asked and answered.
+        Marks the deep dive as complete in memory and closes the whiteboard.
+        """
+        import json as _json
+        try:
+            sb = get_supabase()
+            if sb and business_id:
+                sb.from_("ai_memory").upsert({
+                    "business_id": business_id, "category": "system",
+                    "memory_key": "deepdive_complete",
+                    "memory_value": f"completed on {datetime.now().strftime('%b %-d, %Y')}",
+                }, on_conflict="business_id,memory_key").execute()
+        except Exception as e:
+            logger.warning(f"deepdive_complete save failed: {e}")
+        try:
+            payload = _json.dumps({"type": "deepdive_end"}).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+        except Exception as e:
+            logger.warning(f"deepdive_end publish failed: {e}")
+        return "Deep dive complete. All answers saved to memory. The whiteboard will close shortly."
+
+    @function_tool
+    async def get_general_qa_questions(ctx: RunContext, qa_type: str = "business") -> str:
+        """Start a General Q&A session — Business Q&A or Website Q&A.
+        These are universal questions that help Aria answer common client inquiries accurately.
+
+        qa_type: "business" = 20 general business questions (hours, location, payment, booking)
+                 "website"  = 20 website questions (online booking, mobile, contact forms, SEO)
+
+        Offer after industry deep dive is complete, or when owner asks "what else can you learn?"
+        Say: "I also have a General [Business/Website] Q&A — 20 questions about the most common
+        things clients ask. Want to go through those? You can skip any and split across sessions."
+        Same workflow: deepdive_ask_question → save_memory → deepdive_mark_answered.
+        """
+        import json as _json
+        qa_key    = "general_website" if "web" in qa_type.lower() else "general_business"
+        questions = DEEPDIVE_QUESTIONS.get(qa_key, [])
+
+        answered_keys: set = set()
+        skipped_keys:  set = set()
+        prev_answers:  list = []
+        try:
+            sb_qa = get_supabase()
+            if sb_qa and business_id:
+                prog = sb_qa.from_("ai_memory").select("memory_key,memory_value,category")                     .eq("business_id", business_id).execute()
+                answered_keys = {
+                    r["memory_key"] for r in (prog.data or [])
+                    if r.get("category") == "business_rule"
+                    and any(r["memory_key"] == k for k, _ in questions)
+                }
+                psk = next((r["memory_value"] for r in (prog.data or [])
+                            if r.get("memory_key") == f"deepdive_skipped_keys_{qa_key}"), "")
+                skipped_keys  = set(psk.split(",")) if psk else set()
+                prev_answers  = [
+                    {"key": r["memory_key"], "value": r["memory_value"]}
+                    for r in (prog.data or [])
+                    if r.get("category") == "business_rule"
+                    and any(r["memory_key"] == k for k, _ in questions)
+                ]
+        except Exception as e:
+            logger.warning(f"get_general_qa_questions load failed: {e}")
+
+        qp = [
+            {
+                "key":      k,
+                "question": q,
+                "answered": k in answered_keys,
+                "skipped":  k in skipped_keys,
+                "answer":   next((a["value"] for a in prev_answers if a["key"] == k), ""),
+            }
+            for k, q in questions
+        ]
+        resume_from = next((i for i, q in enumerate(qp) if not q["answered"] and not q["skipped"]), 0)
+        board_title = "General Website Q&A" if qa_key == "general_website" else "Business Q&A"
+
+        try:
+            payload = _json.dumps({
+                "type":      "deepdive_start",
+                "company":   business_name,
+                "industry":  qa_key,
+                "title":     board_title,
+                "questions": qp,
+            }).encode()
+            await ctx.room.local_participant.publish_data(payload, topic="aria_commands", reliable=True)
+            logger.info(f"General QA board: {qa_key} for {business_name}")
+        except Exception as e:
+            logger.warning(f"get_general_qa_questions publish failed: {e}")
+
+        lines = [f"{'RESUMING' if answered_keys else 'STARTING'} {board_title} ({len(questions)} questions). Board showing."]
+        lines.append("WORKFLOW: deepdive_ask_question(N) → ask → save_memory → deepdive_mark_answered(N)")
+        lines.append(f"START AT INDEX: {resume_from}")
+        for i, q in enumerate(qp):
+            st = "✓" if q["answered"] else ("–" if q["skipped"] else ("→" if i==resume_from else "·"))
+            lines.append(f"Q{i+1}[{st}] '{q['key']}': {q['question']}")
+        return "\n".join(lines)
+
+    @function_tool
+    async def schedule_deepdive_session(ctx: RunContext, preferred_day: str = "", preferred_time: str = "") -> str:
+        """Schedule a dedicated 'Deep Dive with Aria' session via Cal.com for a later time.
+        Call when owner says they'd prefer to do the onboarding questions at a scheduled time.
+        preferred_day: e.g. 'Tuesday', 'tomorrow', 'next week'
+        preferred_time: e.g. '2pm', 'morning', 'afternoon'
+
+        This creates a reminder and a Cal.com booking link for a 30-min dedicated session.
+        After calling, say: 'Done! I've set up a session for us. You'll get a confirmation, 
+        and I'll remind you the day before. Looking forward to it!'
+        """
+        try:
+            sb = get_supabase()
+            if sb and business_id:
+                # Save that deepdive is scheduled
+                sb.from_("ai_memory").upsert({
+                    "business_id": business_id,
+                    "category":    "system",
+                    "memory_key":  "deepdive_scheduled",
+                    "memory_value": f"scheduled{(': ' + preferred_day + ' ' + preferred_time).strip() if preferred_day or preferred_time else ''}",
+                }, on_conflict="business_id,memory_key").execute()
+
+                # Create a reminder
+                try:
+                    from datetime import timedelta
+                    remind_at = datetime.now() + timedelta(days=1)
+                    if preferred_day.lower() in ("tomorrow",):
+                        remind_at = datetime.now() + timedelta(hours=20)
+
+                    sb.from_("reminders").insert({
+                        "business_id":     business_id,
+                        "title":           "Deep Dive Session with Aria",
+                        "message_template": f"Your Deep Dive session with Aria is scheduled{(': ' + preferred_day + ' ' + preferred_time).strip() if preferred_day or preferred_time else ''}. Aria has 7 personalized questions ready to make her an even better receptionist for your business!",
+                        "reminder_type":   "deepdive",
+                        "channel":         "sms",
+                        "scheduled_at":    remind_at.isoformat(),
+                        "status":          "pending",
+                    }).execute()
+                except Exception as re:
+                    logger.warning(f"Reminder insert failed: {re}")
+
+                # Generate Cal.com booking link (uses business's Cal.com integration if connected)
+                cal_link = "https://cal.com/aria-receptionist/deep-dive"
+                try:
+                    cal_res = sb.from_("integration_cal_accounts").select("cal_user_id").eq("business_id", business_id).eq("is_active", True).single().execute()
+                    if cal_res.data:
+                        cal_link = f"https://cal.com/{cal_res.data['cal_user_id']}/deep-dive"
+                except Exception:
+                    pass
+
+                logger.info(f"Deep dive session scheduled for {business_id}: {preferred_day} {preferred_time}")
+                return f"Deep dive session scheduled. Cal.com booking link: {cal_link}. Reminder saved."
+
+        except Exception as e:
+            logger.warning(f"schedule_deepdive_session error: {e}")
+        return "Deep dive session scheduled. I'll remind you next time we talk."
 
     @function_tool
     async def add_service(ctx: RunContext, name: str, price: float = 0, duration_minutes: int = 60, category: str = "", description: str = "") -> str:
@@ -2423,10 +3230,10 @@ ONBOARDING RULES:
         _owner = (biz_ctx.get("config") or {}).get("owner_name") or ""
     if _owner:
         logger.info(f"Greeting owner by name: {_owner}")
-    _greeting_hint = f"Give a warm 1-sentence greeting as {_ai_name}."
+    _greeting_hint = f"Give a warm, genuinely curious 1-2 sentence greeting as {_ai_name}. Include 'How are you doing?' or 'How's your day going?' — sound like a real person who cares, not a robot. Be bright and warm."
     if _owner:
         _greeting_hint += f" The owner's name is {_owner} — greet them by name. Do NOT ask 'did I get that right' — you already know their name."
-    _greeting_hint += " One sentence only. Do not ask any questions in the greeting."
+    _greeting_hint += " Maximum 2 sentences. No questions other than 'how are you' in the greeting."
 
     try:
         await session.generate_reply(instructions=_greeting_hint)
