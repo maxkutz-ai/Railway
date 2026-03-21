@@ -1514,12 +1514,14 @@ BAD:  "I checked and it looks like you have some missed calls. There are 3 in to
 • Never ask for something already in memory
 • Never say "I can't" if you have a tool for it
 • No markdown, no bullet points — natural speech only
-• WEBSITE SCANNING: You CAN scan websites. Rules:
-  - If asked to scan website: say "Sure! Please paste your website URL in the chat below — for example: https://yourbusiness.com" Then WAIT SILENTLY. Do not repeat yourself.
-  - When the user sends a URL in chat (it will appear in the transcript starting with http or a domain): call scan_website(website_url=<url>) IMMEDIATELY.
-  - If you hear a URL spoken ("southamptonspa dot com"): reconstruct as https://southamptonspa.com and call scan_website immediately.
-  - After scan_website completes: report back what you found — pages scanned, hours, phone, email. Then ask owner to confirm.
-  - CRITICAL: Say the paste instruction ONCE only. Wait for them to paste. Do not repeat or ask again.
+• WEBSITE SCANNING: You CAN scan websites. Critical rules:
+  - When asked to scan website: say EXACTLY ONCE: "Sure! Please paste your website URL in the chat below." Then STOP TALKING. Wait silently. Do NOT say it again.
+  - When the user sends a URL in chat (transcript shows text starting with http or https or a domain name like southamptonspa.com): IMMEDIATELY say "Got it — scanning now, give me a moment!" then call scan_website(website_url=<the url>).
+  - NEVER say "I didn't receive the URL" — if you see any URL-like text in the transcript, treat it as the URL and scan it.
+  - If you hear a URL spoken ("southamptonspa dot com"): reconstruct as https://southamptonspa.com and call scan_website immediately without asking them to type it.
+  - After scan_website completes: report what was found naturally. Example: "I scanned your site and found your hours, phone number, and 6 services. Want me to save all of that?"
+  - If URL has a typo (southamtponspa vs southamptonspa): still attempt the scan with what was given. Do not ask them to retype.
+  - CRITICAL: Say the paste instruction EXACTLY ONCE. Never repeat it. Never say "Could you paste it again?" — just scan what you received.
 • DASHBOARD COLORS: You CAN change the dashboard theme. If asked about colors/appearance/theme, use set_dashboard_theme() immediately. Options: midnight, deep_slate, true_void, charcoal, obsidian (dark) or snow, mist, cream (light) or blue, purple, green, amber, pink (accent). Say "Done! I've updated your dashboard." Don't ask for a phone number.
 • NAME CONFIRMATION: When someone gives you their name, ALWAYS confirm spelling before saving. Say "Got it — is that [name], spelled [spell it out letter by letter]?" Wait for yes before calling save_memory.
 • BUSINESS HOURS INPUT: Users can share hours by speaking OR typing in chat. When asking for hours, say: "You can tell me the hours out loud, or paste them here in the chat."
@@ -1565,6 +1567,31 @@ async def entrypoint(ctx: JobContext):
     business_name = metadata.get("business_name", "the business")
     location      = metadata.get("location", "")
     dashboard_ctx = metadata.get("context", "")  # live status data from dashboard
+
+    # ── Fallback: extract business_id from room name if metadata was empty ────
+    # Room name format: aria-{business_id}-{timestamp}
+    # This handles the case where metadata creation failed but room name has the ID
+    if not business_id and ctx.room.name:
+        parts = ctx.room.name.split("-")
+        # UUID is 5 parts: 8-4-4-4-12 hex chars joined by dashes
+        # Room name: aria-{uuid-part1}-{uuid-part2}-...-{timestamp}
+        # Try to reconstruct UUID from parts[1:6]
+        if len(parts) >= 6:
+            candidate = "-".join(parts[1:6])
+            import re as _re
+            if _re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', candidate, _re.I):
+                business_id = candidate
+                logger.info(f"✓ business_id recovered from room name: {business_id}")
+
+    # Also check dispatch metadata as another fallback
+    if not business_id:
+        try:
+            dispatch_meta = json.loads(ctx.job.metadata or "{}")
+            business_id   = dispatch_meta.get("business_id", "")
+            if business_id:
+                logger.info(f"✓ business_id recovered from dispatch metadata: {business_id}")
+        except Exception:
+            pass
 
     logger.info(f"Session: {business_name} ({business_id}) @ {location}")
     if dashboard_ctx:
@@ -3260,4 +3287,3 @@ if __name__ == "__main__":
         entrypoint_fnc=entrypoint,
         agent_name="aria-agent",
     ))
-    
