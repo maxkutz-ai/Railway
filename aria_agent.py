@@ -3657,6 +3657,7 @@ ONBOARDING RULES:
                 lookup_contact,
                 get_upcoming_appointments,
                 # Documents
+                search_knowledge,
                 search_documents,
                 # Utility
                 get_weather,
