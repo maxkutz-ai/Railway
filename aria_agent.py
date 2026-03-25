@@ -3275,7 +3275,30 @@ ONBOARDING RULES:
         """Cancel a queued action when the owner says no."""
         pending_confirmations.pop(confirmation_id, None)
         return "Action cancelled. No changes made."
-
+      
+    @function_tool
+    async def search_knowledge(ctx: RunContext, query: str) -> str:
+        """Search the knowledge base. Call FIRST for any business-specific question."""
+        try:
+            import httpx as _h, json as _j, os as _o
+            async with _h.AsyncClient() as c:
+                r = await c.post("https://api.openai.com/v1/embeddings",
+                    headers={"Authorization": f"Bearer {_o.getenv('OPENAI_API_KEY')}",
+                             "Content-Type": "application/json"},
+                    json={"model": "text-embedding-3-small", "input": query}, timeout=8)
+                if not r.is_success:
+                    return _j.dumps({"found": False})
+                emb = r.json()["data"][0]["embedding"]
+            sb2 = get_supabase()
+            if not sb2: return _j.dumps({"found": False})
+            res = sb2.rpc("match_knowledge_chunks", {"query_embedding": emb,
+                "match_business_id": business_id, "match_threshold": 0.7, "match_count": 4}).execute()
+            chunks = res.data or []
+            if not chunks: return _j.dumps({"found": False, "message": "No relevant info found."})
+            return _j.dumps({"found": True, "content": " ".join(c["content"][:400] for c in chunks[:3])[:1200]})
+        except Exception as e:
+            return _j.dumps({"found": False, "error": str(e)})
+          
     @function_tool
     async def search_documents(ctx: RunContext, query: str) -> str:
         """Search Google Drive and Dropbox for business documents.
