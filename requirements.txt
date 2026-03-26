@@ -3,7 +3,8 @@
 # Upgrade via staging branch + Dependabot PR only
 
 # LiveKit agent framework
-livekit-agents[openai,silero,simli,deepgram]==1.0.0
+livekit-agents[openai,silero,deepgram]>=1.0.0,<2.0.0
+livekit-plugins-simli>=1.0.0
 
 # Database
 supabase==2.10.0
