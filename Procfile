@@ -1,1 +1,1 @@
-worker: python aria_agent.py start
+web: pip install python-multipart==0.0.12 --quiet && python call_handler.py
