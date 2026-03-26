@@ -1,0 +1,2 @@
+# Procfile for aria-call-handler (Twilio phone service)
+web: python call_handler.py

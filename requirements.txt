@@ -1,13 +1,26 @@
-# ── Aria Video Agent (LiveKit) ────────────────────────────────────
-livekit-agents[openai,silero,simli,deepgram]>=0.12.0
-supabase>=2.3.0
-httpx>=0.27.0
-python-dotenv>=1.0.0
-google-api-python-client>=2.0.0
-google-auth>=2.0.0
-dropbox>=11.36.0
+# aria_agent.py -- LiveKit Video Agent
+# Python 3.12 | Pinned 2026-03-25
+# Upgrade via staging branch + Dependabot PR only
 
-# ── Aria Call Handler (FastAPI + Twilio WebSocket) ─────────────────
-fastapi>=0.110.0
-uvicorn>=0.29.0
-websockets>=12.0
+# LiveKit agent framework
+livekit-agents[openai,silero,simli,deepgram]==0.12.0
+
+# Database
+supabase==2.3.0
+
+# HTTP client
+httpx==0.27.0
+
+# Environment
+python-dotenv==1.0.0
+
+# Google Drive integration
+google-api-python-client==2.0.0
+google-auth==2.0.0
+
+# Dropbox integration
+dropbox==11.36.0
+
+# NOTE: FastAPI/uvicorn/websockets/twilio intentionally excluded --
+# those live in the call_handler service only.
+# railway_security.py is a local file -- no pip install needed.
