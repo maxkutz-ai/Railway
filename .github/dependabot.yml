@@ -1,0 +1,26 @@
+# .github/dependabot.yml — railway
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "livekit-agents"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "livekit-plugins-simli"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "fastapi"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "uvicorn"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "supabase"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
