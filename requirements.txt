@@ -1,10 +1,10 @@
 # aria_agent.py -- LiveKit Video Agent
-# Python 3.12 | Pinned 2026-03-25
+# Python 3.12 | Pinned 2026-03-26
 # Upgrade via staging branch + Dependabot PR only
 
 # LiveKit agent framework
-livekit-agents[openai,silero,deepgram]>=1.0.0,<2.0.0
-livekit-plugins-simli>=1.0.0
+livekit-agents[openai,silero,deepgram]==1.5.1
+livekit-plugins-simli==1.5.1
 
 # Database
 supabase==2.10.0
