@@ -68,13 +68,20 @@ async def get_business_config(to_number: str) -> dict:
     try:
         # Try integration_twilio_numbers first
         result = sb.from_("integration_twilio_numbers") \
-            .select("business_id, businesses(name, id), settings_business(aria_personality, business_hours, services_offered)") \
+            .select("business_id") \
             .eq("phone_number", to_number) \
             .eq("is_active", True) \
-            .single() \
+            .limit(1) \
             .execute()
-        if result.data:
-            return result.data
+        if result.data and len(result.data) > 0:
+            biz_id = result.data[0]["business_id"]
+            biz = sb.from_("businesses").select("id,name").eq("id", biz_id).single().execute()
+            cfg = sb.from_("settings_business").select("aria_personality,business_hours,services_offered").eq("business_id", biz_id).single().execute()
+            return {
+                "business_id": biz_id,
+                "businesses": biz.data,
+                "settings_business": cfg.data,
+            }
     except:
         pass
     # Fallback: twilio_provisioned_numbers
@@ -82,10 +89,10 @@ async def get_business_config(to_number: str) -> dict:
         result = sb.from_("twilio_provisioned_numbers") \
             .select("business_id") \
             .eq("phone_number", to_number) \
-            .single() \
+            .limit(1) \
             .execute()
-        if result.data:
-            biz_id = result.data["business_id"]
+        if result.data and len(result.data) > 0:
+            biz_id = result.data[0]["business_id"]
             biz = sb.from_("businesses").select("name").eq("id", biz_id).single().execute()
             cfg = sb.from_("settings_business") \
                 .select("aria_personality, business_hours, services_offered") \
@@ -212,7 +219,7 @@ async def media_stream(websocket: WebSocket):
     try:
         # Connect to OpenAI Realtime
         openai_ws = await websockets.connect(
-            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01",
+            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1",
@@ -283,7 +290,7 @@ async def media_stream(websocket: WebSocket):
 
                 elif event == "media":
                     # Forward audio from Twilio to OpenAI
-                    if openai_ws.open:
+                    if not openai_ws.state.name == "CLOSED":
                         await openai_ws.send(json.dumps({
                             "type":        "input_audio_buffer.append",
                             "audio":       data["media"]["payload"],
@@ -342,7 +349,7 @@ async def media_stream(websocket: WebSocket):
                 save_call_record(call_sid, business_id, from_number, full_transcript, duration)
             )
         # Close OpenAI WS
-        if openai_ws and openai_ws.open:
+        if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
         logger.info(f"Call ended: {call_sid} ({len(transcript)} turns)")
 
@@ -379,6 +386,12 @@ async def sms_webhook(request: Request):
         content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
         media_type="application/xml",
     )
+
+
+@app.post("/twilio-status")
+async def twilio_status(request: Request):
+    """Twilio calls this with call status updates — just acknowledge it."""
+    return Response(content="", status_code=204)
 
 
 if __name__ == "__main__":
