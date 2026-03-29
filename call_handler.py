@@ -555,3 +555,34 @@ async def provision_business(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("call_handler:app", host="0.0.0.0", port=PORT, reload=False)
+
+
+# ── Health Check Endpoint ─────────────────────────────────────────────────────
+@app.get("/health")
+async def health_check():
+    """Railway health check — verifies app is alive and Supabase is reachable."""
+    import time
+    start = time.time()
+    status = {"status": "ok", "service": "receptionist-call-handler", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    # Check Supabase connectivity
+    try:
+        sb = get_sb()
+        result = sb.from_("businesses").select("id").limit(1).execute()
+        status["supabase"] = "connected"
+    except Exception as e:
+        status["supabase"] = f"error: {str(e)[:60]}"
+        status["status"] = "degraded"
+
+    # Check Twilio credentials present
+    status["twilio_configured"] = bool(os.environ.get("TWILIO_ACCOUNT_SID") and os.environ.get("TWILIO_AUTH_TOKEN"))
+    status["openai_configured"]  = bool(os.environ.get("OPENAI_API_KEY"))
+    status["response_ms"] = round((time.time() - start) * 1000)
+
+    return status
+
+
+@app.get("/ping")
+async def ping():
+    """Lightweight ping — just confirms the process is running."""
+    return {"pong": True}
