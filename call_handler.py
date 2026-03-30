@@ -395,6 +395,7 @@ async def media_stream(websocket: WebSocket):
     start_time   = datetime.now(timezone.utc)
     business_cfg = {}
     business_id  = ""
+    max_call_mins = 10  # default — overridden from DB once start event fires
 
     openai_ws = None
 
