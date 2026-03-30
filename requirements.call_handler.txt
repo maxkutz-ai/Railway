@@ -19,7 +19,7 @@ supabase==2.10.0
 python-multipart==0.0.12
 
 # Environment
-python-dotenv==1.0.0
+python-dotenv==1.2.2
 
 # Twilio webhook signature verification
 twilio==9.3.0
