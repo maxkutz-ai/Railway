@@ -305,6 +305,26 @@ def build_memory_block(memories: list) -> str:
     lines.append("\n━━━ END KNOWLEDGE BASE ━━━")
     return "\n".join(lines)
 
+
+async def upsert_active_call(business_id: str, call_sid: str, from_number: str, status: str, transcript_turns: list = None):
+    """Write/update active call in Supabase so the dashboard live counter works."""
+    sb = get_sb()
+    if not sb or not business_id or not call_sid:
+        return
+    try:
+        row = {
+            "call_sid":    call_sid,
+            "business_id": business_id,
+            "from_number": from_number,
+            "status":      status,
+            "updated_at":  datetime.now(timezone.utc).isoformat(),
+        }
+        if transcript_turns is not None:
+            row["live_transcript"] = transcript_turns
+        sb.from_("active_calls").upsert(row, on_conflict="call_sid").execute()
+    except Exception as e:
+        logger.warning(f"active_calls upsert failed (non-critical): {e}")
+
 async def save_call_record(call_sid: str, business_id: str, from_number: str,
                             transcript: str, duration: int, start_time_iso: str = None):
     """Save completed call to Supabase."""
@@ -537,6 +557,11 @@ async def media_stream(websocket: WebSocket):
                         }
                     }))
 
+                    # ── Register active call in DB (powers live dashboard counter) ──
+                    asyncio.create_task(upsert_active_call(
+                        business_id, call_sid, from_number, "in-progress"
+                    ))
+
                     # Initial greeting trigger
                     await openai_ws.send(json.dumps({
                         "type": "conversation.item.create",
@@ -575,6 +600,14 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Aria: {text}")
+                        # Push live transcript every 4 turns for Glass Box
+                        if len(transcript) % 4 == 0 and business_id:
+                            turns = [{"role": "ai" if t.startswith("Aria:") else "user",
+                                      "text": t.split(": ", 1)[-1], "ts": datetime.now(timezone.utc).isoformat()}
+                                     for t in transcript[-20:]]
+                            asyncio.create_task(upsert_active_call(
+                                business_id, call_sid, from_number, "in-progress", turns
+                            ))
 
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     text = data.get("transcript", "")
@@ -631,6 +664,8 @@ async def media_stream(websocket: WebSocket):
             asyncio.create_task(
                 save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat())
             )
+            # Mark active call as completed (removes from live counter)
+            asyncio.create_task(upsert_active_call(business_id, call_sid, from_number, "completed"))
         if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
         logger.info(f"Call ended: {call_sid} ({len(transcript)} turns)")
