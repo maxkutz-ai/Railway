@@ -18,6 +18,10 @@ import asyncio
 import base64
 import re
 from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo          # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo # fallback
 
 import httpx
 import websockets
@@ -245,7 +249,7 @@ async def get_business_config(to_number: str) -> dict:
 
     # ── businesses ────────────────────────────────────────────────────────────
     try:
-        r = sb.from_("businesses").select("id,name,industry,phone,website").eq("id", biz_id).single().execute()
+        r = sb.from_("businesses").select("id,name,email").eq("id", biz_id).single().execute()
         result["businesses"] = r.data or {}
     except:
         result["businesses"] = {}
@@ -269,7 +273,7 @@ async def get_business_config(to_number: str) -> dict:
 
     # ── ai_receptionist_config ────────────────────────────────────────────────
     try:
-        r = sb.from_("ai_receptionist_config").select("name,greeting,personality,escalation_phone").eq("business_id", biz_id).single().execute()
+        r = sb.from_("ai_receptionist_config").select("name,greeting,escalation_phone").eq("business_id", biz_id).maybeSingle().execute()
         result["ai_config"] = r.data or {}
     except:
         result["ai_config"] = {}
@@ -354,7 +358,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             "status":           "completed",
             "call_status":      "completed",
             "started_at":       start_time_iso or datetime.now(timezone.utc).isoformat(),
-            "transcript_summary": clean_transcript[:2000],
+            "transcript_summary": clean_transcript[:8000],
         }, on_conflict="twilio_call_sid").execute()
 
         # Fetch call_id for AUP analysis
@@ -402,6 +406,8 @@ async def twilio_incoming(request: Request):
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Record action="/twilio-status" method="POST" recordingStatusCallback="/twilio-status"
+            recordingStatusCallbackMethod="POST" trim="trim-silence"/>
     <Connect>
         <Stream url="{ws_url}">
             <Parameter name="ctx" value="{context_b64}"/>
@@ -422,7 +428,7 @@ async def media_stream(websocket: WebSocket):
     to_number    = ""
     from_number  = ""
     transcript   = []
-    start_time   = datetime.now(timezone.utc)
+    start_time   = None  # set when Twilio start event fires (actual call start)
     business_cfg = {}
     business_id  = ""
     max_call_mins = 10  # default — overridden from DB once start event fires
@@ -459,6 +465,7 @@ async def media_stream(websocket: WebSocket):
                         except:
                             pass
 
+                    start_time = datetime.now(timezone.utc)  # actual call start
                     logger.info(f"Stream started: {stream_sid} | {from_number} → {to_number}")
 
                     # Load business config + memories
@@ -534,7 +541,7 @@ async def media_stream(websocket: WebSocket):
                         business_name=biz_name,
                         aria_name=aria_name,
                         custom_instructions=custom_instr,
-                        datetime=datetime.now().strftime("%A %B %d %Y %I:%M %p"),
+                        datetime=datetime.now(ZoneInfo(tz)).strftime("%A %B %d %Y %I:%M %p %Z"),
                         timezone=tz,
                         opening_greeting=opening,
                         business_hours=hours,
@@ -592,6 +599,10 @@ async def media_stream(websocket: WebSocket):
 
                 elif event == "stop":
                     logger.info(f"Stream stopped: {stream_sid}")
+                    # ── Instant UI update: delete active call NOW ──
+                    # save_call_record runs async later — UI clears immediately
+                    if call_sid and business_id:
+                        asyncio.create_task(delete_active_call(call_sid))
                     break
 
         async def receive_from_openai():
@@ -669,12 +680,17 @@ async def media_stream(websocket: WebSocket):
         logger.error(f"Media stream error: {e}")
     finally:
         if call_sid and business_id:
-            duration        = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            duration        = int((datetime.now(timezone.utc) - (start_time or datetime.now(timezone.utc))).total_seconds())
+            # Small delay to let any in-flight OpenAI transcript events complete
+            # before we snapshot the transcript list (prevents last 1-2 turns being cut)
+            await asyncio.sleep(2)
             full_transcript = "\n".join(transcript)
+            turn_count = len(transcript)
+            logger.info(f"Saving transcript: {turn_count} turns, {len(full_transcript)} chars")
             asyncio.create_task(
-                save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat())
+                save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
             )
-            # DELETE active call row (removes from live counter, keeps active_calls table lean)
+            # delete_active_call already fired on stream stop — this is a safety net
             asyncio.create_task(delete_active_call(call_sid))
         if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
@@ -715,6 +731,29 @@ async def sms_webhook(request: Request):
 
 @app.post("/twilio-status")
 async def twilio_status(request: Request):
+    """Twilio calls this with call status updates — save recording URL when available."""
+    form = await request.form()
+    call_sid      = form.get("CallSid", "")
+    recording_url = form.get("RecordingUrl", "")
+    call_status   = form.get("CallStatus", "")
+
+    # When recording is ready, save it to the calls table
+    if recording_url and call_sid:
+        async def save_recording():
+            sb = get_sb()
+            if not sb:
+                return
+            try:
+                # Twilio appends .json — strip and use .mp3 for direct playback
+                clean_url = recording_url.replace(".json", "") + ".mp3"
+                sb.from_("calls").update({
+                    "recording_url": clean_url
+                }).eq("twilio_call_sid", call_sid).execute()
+                logger.info(f"Recording saved for {call_sid}")
+            except Exception as e:
+                logger.warning(f"recording save failed: {e}")
+        asyncio.create_task(save_recording())
+
     return Response(content="", status_code=204)
 
 
