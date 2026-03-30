@@ -19,6 +19,14 @@ import base64
 import re
 from datetime import datetime, timezone
 try:
+    from encryption import decrypt_api_key, encrypt_text, decrypt_text, should_encrypt
+except ImportError:
+    # Graceful fallback if encryption module not deployed
+    def decrypt_api_key(x): return x
+    def encrypt_text(x): return x
+    def decrypt_text(x): return x
+    def should_encrypt(): return False
+try:
     from zoneinfo import ZoneInfo          # Python 3.9+
 except ImportError:
     from backports.zoneinfo import ZoneInfo # fallback
@@ -40,7 +48,7 @@ app = FastAPI()
 # ── Environment ───────────────────────────────────────────────────────────────
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY      = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_KEY      = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("SUPABASE_SERVICE_KEY", ""))  # Service Role bypasses RLS
 PORT              = int(os.environ.get("PORT", 8080))
 APP_URL           = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.receptionist.co")
 
@@ -144,6 +152,34 @@ If a caller asks a diagnostic or medical question ("Is this safe if I'm pregnant
   licensed professionals handle directly. Can I have someone call you back?"
 - Never attempt to answer. Offer a callback every time.
 
+━━━ EMERGENCY TRANSFER RULE ━━━
+Use the transfer_call tool IMMEDIATELY when:
+- Caller says "emergency", "urgent", "right now", "flooding", "burst pipe", 
+  "not breathing", "chest pain", severe pain, or ANY emergency keyword
+- Caller says "let me speak to a human", "I want a real person", "transfer me" 
+  (more than once)
+ALWAYS say "Please hold while I connect you to the team" BEFORE calling the tool.
+Never use transfer_call for standard questions or booking requests.
+━━━ END EMERGENCY TRANSFER ━━━
+
+━━━ APPOINTMENT BOOKING RULES ━━━
+You have two tools for booking: check_availability and book_appointment.
+
+BOOKING WORKFLOW:
+1. When a caller asks to book/schedule, ask what day works best for them.
+2. Use check_availability with that date. Read ONLY the options returned — never invent times.
+3. Once they pick a time, confirm: "Let me lock that in for you. May I get your name, 
+   email address, and the best phone number for you?"
+4. Once you have name + email + phone + time, call book_appointment immediately.
+5. After booking: "Perfect! I just sent a confirmation link to [email]. 
+   Please click it within 24 hours to finalize your appointment."
+
+IMPORTANT:
+- Never promise a time without running check_availability first
+- Never book without collecting name, email, AND phone
+- If check_availability returns an error, offer to take a message instead
+━━━ END BOOKING RULES ━━━
+
 ━━━ EMERGENCY BYPASS RULE ━━━
 If you detect ANY of these emergency keywords: {emergency_keywords}
 Immediately say:
@@ -228,11 +264,31 @@ never miss a job while you're on-site. It's $295 per month for the AI receptioni
 and 500 minutes. The $299 setup fee covers your custom call-routing, service area logic,
 and SMS follow-up tools. Would you like to see how that integrates with your workflow?"
 
+IF Medical / MedSpa / Wellness / Weight Loss / Clinic / Dental / Dermatology / Veterinary / Vet Clinic / Animal Hospital:
+"For medical, wellness, and veterinary practices, our Healthcare plan is $495 per month —
+that includes 750 voice minutes, HIPAA-compliant data pipelines, a signed BAA,
+and a dedicated local number. The one-time setup fee is $499, which covers
+your secure data pipeline, patient intake protocols, and calendar integration.
+For practices with higher call volume, we also offer a $750/month plan.
+Does that sound like the right fit for your practice?"
+
+IF Home & Field Services (Plumber / HVAC / Electrician / Roofer / Landscaping /
+Pest Control / Contractor / Moving / Towing / Auto Detail):
+"For home service businesses, our Field Services plan is $295 per month —
+500 voice minutes, 24/7 emergency dispatch, live call transfer to you,
+SMS booking links, and a local dedicated number. One-time setup is $299.
+You'll never miss a job while you're on-site. Does that work for your business?"
+
+IF Professional Services (Law / Accounting / Consulting / Real Estate / Insurance):
+"For professional services, our plan is $395 per month — 600 voice minutes,
+appointment booking, lead qualification, and a CRM dashboard.
+One-time setup fee is $399. Would you like more details?"
+
 IF Other / General / Unsure:
-"Our platform is $295 per month — that includes your AI receptionist, 500 voice minutes,
-and a CRM dashboard to track every lead. There's a one-time $299 setup fee to get your
-custom business knowledge and booking system fully integrated.
-Does that fit within your budget?"
+"Our plans start at $295 per month depending on your industry and compliance
+requirements — we have specialized packages for healthcare, field services,
+and professional businesses. Could I ask what industry you're in so I can
+give you the most accurate information?"
 
 GUARDRAILS for all pricing conversations:
 - Always state: month-to-month, cancel any time, no long-term contracts
@@ -328,7 +384,8 @@ async def get_business_config(to_number: str) -> dict:
     try:
         r = sb.from_("settings_business").select(
             "aria_personality,business_hours,services_offered,timezone,"
-            "max_call_duration_minutes,address,phone,website_url,brand_name"
+            "max_call_duration_minutes,address,phone,website_url,brand_name,"
+            "announce_recording,recording_consent_text"
         ).eq("business_id", biz_id).single().execute()
         result["settings_business"] = r.data or {}
     except:
@@ -462,12 +519,12 @@ async def extract_lead_from_transcript(
             "lead_status":  "new",
             "source":       "call",
             "last_summary": transcript[:500],
-            "ai_notes":     _json.dumps({
+            "ai_notes":     (encrypt_text if should_encrypt() else lambda x: x)(_json.dumps({
                 "interest":    extracted.get("interest"),
                 "intent":      extracted.get("intent"),
                 "captured_at": datetime.now(timezone.utc).isoformat(),
                 "call_sid":    call_sid,
-            }),
+            })),
             "updated_at":   datetime.now(timezone.utc).isoformat(),
         }
 
@@ -533,12 +590,24 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
         if len(caller) == 10:
             caller = f"({caller[:3]}) {caller[3:6]}-{caller[6:]}"
 
-        lead_label = "🎉 Full lead" if has_email else "⚡ Hot lead (no email)"
+        # Extract first name from transcript for personalized alert
+        import re as _re2
+        nm = _re2.search(r"(?:name is|I am|my name)\s+([A-Z][a-z]+)", transcript)
+        caller_name = (nm.group(1) + " *") if nm else None
+
+        if has_email:
+            label = "📅 New lead captured!"
+            who   = f"Caller: {caller_name or caller}"
+        else:
+            label = "⚡ Hot lead — no email"
+            who   = f"Caller: {caller} (no email — call back!)"
+
         msg = (
-            f"{lead_label} from {caller}\n"
-            f"Aria captured info for {biz_name}."
-            + ("\nNo email — call them back!" if not has_email else "")
-            + "\nCRM: https://app.receptionist.co/dashboard"
+            f"🤖 Aria Alert — {biz_name}\n"
+            f"{label}\n"
+            f"{who}\n"
+            f"CRM: https://app.receptionist.co/dashboard\n"
+            "Reply STOP to opt out. Msg & Data rates may apply."
         )
 
         TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
@@ -554,31 +623,192 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
                 )
                 logger.info(f"Lead SMS sent for {business_id}")
 
-        # Email via Resend
-        RESEND_KEY = os.environ.get("RESEND_API_KEY", "")
-        if notify_email and RESEND_KEY:
+        # Email via Postmark (business-facing transactional mail)
+        POSTMARK_KEY = os.environ.get("POSTMARK_SERVER_TOKEN", "")
+        if notify_email and POSTMARK_KEY:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    "https://api.resend.com/emails",
-                    headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json"},
+                    "https://api.postmarkapp.com/email",
+                    headers={
+                        "X-Postmark-Server-Token": POSTMARK_KEY,
+                        "Content-Type": "application/json",
+                    },
                     json={
-                        "from": "Aria <notifications@receptionist.co>",
-                        "to": [notify_email],
-                        "subject": f"🎉 New lead captured by Aria — {biz_name}",
-                        "html": f"<div style='font-family:Arial;max-width:520px;padding:24px'>"
-                                f"<h2>New Lead Captured</h2>"
-                                f"<p>Aria captured a new lead from <strong>{caller}</strong> on your Receptionist.co line.</p>"
-                                f"<p><a href='https://app.receptionist.co/dashboard' style='background:#4F8EF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;'>View in CRM →</a></p>"
-                                f"<hr><p style='font-size:12px;color:#94A3B8'>Transcript preview:<br>{transcript[:400]}...</p>"
-                                f"</div>",
+                        "From": "Aria <notifications@mail.receptionist.co>",
+                        "To": notify_email,
+                        "Subject": f"📅 Aria Alert: {'New lead' if has_email else 'Hot lead (no email)'} — {biz_name}",
+                        "HtmlBody": (
+                            f"<div style='font-family:-apple-system,Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;background:#0A1628;color:#E2E8F0'>"
+                            f"<div style='font-size:22px;font-weight:800;color:#fff;margin-bottom:4px'>Receptionist.co</div>"
+                            f"<div style='font-size:12px;color:#4F8EF7;margin-bottom:28px'>AI Front Desk</div>"
+                            f"<div style='background:linear-gradient(135deg,#1a2744,#0f1e38);border:1px solid rgba(79,142,247,0.3);border-radius:12px;padding:24px;margin-bottom:20px'>"
+                            f"<div style='font-size:13px;color:#94A3B8;margin-bottom:4px'>🤖 Aria captured a new lead for</div>"
+                            f"<div style='font-size:20px;font-weight:800;color:#fff;margin-bottom:16px'>{biz_name}</div>"
+                            + (f"<div style='display:flex;gap:8px;margin-bottom:8px'><span style='color:#94A3B8;font-size:13px'>Caller:</span><span style='color:#fff;font-size:13px;font-weight:600'>{caller_name or caller}</span></div>" if True else "")
+                            + (f"<div style='display:flex;gap:8px;margin-bottom:8px'><span style='color:#94A3B8;font-size:13px'>Email:</span><span style='color:#fff;font-size:13px'>{caller}</span></div>" if has_email else f"<div style='background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:10px;font-size:12px;color:#FCA5A5'>⚠️ No email provided — call them back directly at {caller}</div>")
+                            + f"</div>"
+                            f"<div style='background:rgba(255,255,255,0.04);border-radius:10px;padding:16px;margin-bottom:20px'>"
+                            f"<div style='font-size:11px;font-weight:700;color:#94A3B8;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px'>Call Summary Preview</div>"
+                            f"<div style='font-size:13px;color:#CBD5E1;line-height:1.7'>{transcript[:300]}...</div>"
+                            f"</div>"
+                            f"<a href='https://app.receptionist.co/dashboard' style='display:block;background:#4F8EF7;color:#fff;text-decoration:none;padding:14px;border-radius:10px;font-weight:700;font-size:14px;text-align:center'>View Full Transcript & Listen to Call →</a>"
+                            f"<p style='font-size:11px;color:#475569;margin-top:24px;border-top:1px solid rgba(255,255,255,0.06);padding-top:16px;text-align:center'>"
+                            f"{biz_name} · Powered by <a href='https://receptionist.co' style='color:#4F8EF7'>Receptionist.co</a> · "
+                            f"<a href='https://receptionist.co/privacy' style='color:#4F8EF7'>Privacy</a> · "
+                            f"<a href='https://receptionist.co/terms' style='color:#4F8EF7'>Terms</a> · "
+                            f"<a href='https://app.receptionist.co/unsubscribe' style='color:#4F8EF7'>Unsubscribe</a></p>"
+                            f"</div>"
+                        ),
+                        "MessageStream": "outbound",
                     },
                     timeout=10.0,
                 )
-                logger.info(f"Lead email sent for {business_id}")
+                logger.info(f"Lead email sent via Postmark for {business_id}")
 
     except Exception as e:
         logger.warning(f"Lead notification failed (non-critical): {e}")
 
+
+
+async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to_number: str) -> str:
+    """
+    Dispatch OpenAI function calls to Cal.com API via the CRM /api/cal routes.
+    Returns a plain text string that Aria will speak to the caller.
+    """
+    CRM_BASE = os.environ.get("CRM_BASE_URL", "https://app.receptionist.co")
+    # Note: CRM routes handle their own Cal.com auth (OAuth tokens)
+    # The encryption module is used when businesses paste a direct API key
+
+    if fn_name == "transfer_call":
+        reason = fn_args.get("reason", "caller requested")
+        try:
+            sb = get_sb()
+            # Get emergency transfer number for this business
+            biz = sb.from_("businesses").select("emergency_transfer_number,name").eq("id", business_id).single().execute()
+            transfer_number = biz.data.get("emergency_transfer_number") if biz.data else None
+            biz_name = biz.data.get("name", "the team") if biz.data else "the team"
+
+            if not transfer_number:
+                # Check ai_receptionist_config for escalation_phone
+                cfg = sb.from_("ai_receptionist_config").select("escalation_phone").eq("business_id", business_id).maybeSingle().execute()
+                transfer_number = cfg.data.get("escalation_phone") if cfg.data else None
+
+            if transfer_number:
+                TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+                TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+                if TWILIO_SID and TWILIO_TOKEN and to_number:
+                    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Joanna">Please hold while I connect you to the team. Transferring now.</Say>
+    <Dial callerId="{to_number}">{transfer_number}</Dial>
+</Response>"""
+                    # Hijack the live call via Twilio REST API
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.post(
+                            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{to_number}.json",
+                            auth=(TWILIO_SID, TWILIO_TOKEN),
+                            data={"Twiml": twiml},
+                            timeout=8.0,
+                        )
+                    if resp.is_success:
+                        logger.info(f"Call transferred: {reason} → {transfer_number}")
+                        return f"Transfer initiated. Tell the caller you are connecting them now and stay quiet."
+                    else:
+                        logger.warning(f"Transfer failed: {resp.status_code}")
+                return f"Transfer initiated to {transfer_number}. Tell the caller you're connecting them."
+            else:
+                logger.warning(f"No emergency transfer number for {business_id}")
+                return "No emergency number on file. Tell the caller: 'I don't have an emergency dispatch number available right now, but I'm marking this as urgent and someone will call you back within minutes. May I confirm the best number to reach you?'"
+        except Exception as e:
+            logger.warning(f"transfer_call error: {e}")
+            return "Transfer system error. Tell the caller you'll have someone call them back immediately and take their number."
+
+    elif fn_name == "check_availability":
+        date       = fn_args.get("date", "")
+        preference = fn_args.get("preference", "any")
+        if not date:
+            return "I don't have a date to check. Could you tell me what day works best for you?"
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{CRM_BASE}/api/cal/slots",
+                    params={"business_id": business_id, "date": date},
+                    timeout=8.0,
+                )
+            if not resp.is_success:
+                return "System error: Unable to load calendar. Please apologize and offer to have someone call them back to schedule."
+
+            data = resp.json()
+            slots = data.get("slots", [])
+
+            if not slots:
+                return f"There are no available slots on {date}. Please ask the caller for an alternative date."
+
+            # Filter by preference
+            if preference == "morning":
+                slots = [s for s in slots if "AM" in s.get("label","").upper() or
+                         int(s.get("label","12:00 PM").split(":")[0].replace(" AM","").replace(" PM","")) < 12]
+            elif preference == "afternoon":
+                slots = [s for s in slots if "PM" in s.get("label","").upper()]
+
+            # Truncate to max 3 options
+            slots = slots[:3]
+
+            if not slots:
+                return f"There are no {preference} slots available on {date}. Would you like to check a different time of day or date?"
+
+            labels = [s["label"] for s in slots]
+            if len(labels) == 1:
+                return f"I have {labels[0]} available on {date}. Would that work for you?"
+            elif len(labels) == 2:
+                return f"I have {labels[0]} or {labels[1]} available on {date}. Which works best?"
+            else:
+                return f"I have {labels[0]}, {labels[1]}, or {labels[2]} available on {date}. Which works best for you?"
+
+        except Exception as e:
+            logger.warning(f"check_availability error: {e}")
+            return "System error: Unable to load calendar. Please apologize and offer to have someone call them back to schedule."
+
+    elif fn_name == "book_appointment":
+        start_time = fn_args.get("startTime", "")
+        name       = fn_args.get("name", "")
+        email      = fn_args.get("email", "")
+        phone      = fn_args.get("phone", "")
+
+        if not all([start_time, name, email]):
+            return "I need the caller's name, email, and preferred time before booking. Please collect any missing details."
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{CRM_BASE}/api/cal/book",
+                    json={
+                        "business_id":   business_id,
+                        "start_time":    start_time,
+                        "contact_name":  name,
+                        "contact_email": email,
+                        "contact_phone": phone,
+                        "notes":         "Booked by Aria via phone",
+                    },
+                    timeout=10.0,
+                )
+            if resp.is_success:
+                return (
+                    f"Booking successful. Tell the caller you just sent a confirmation link "
+                    f"to {email} and they need to click it to finalize the appointment. "
+                    f"Remind them to check their spam folder if they don't see it within a minute."
+                )
+            else:
+                err = resp.json().get("error","unknown error")
+                logger.warning(f"book_appointment error: {err}")
+                return "Error: That slot may have just been taken or the booking system had an issue. Apologize and offer to check another time, or say someone will call them back."
+
+        except Exception as e:
+            logger.warning(f"book_appointment exception: {e}")
+            return "Error: Unable to reach the booking system. Please apologize and offer to have someone call them back to confirm the appointment."
+
+    return f"Unknown function: {fn_name}"
 
 async def silence_monitor(openai_ws, get_last_speech, get_is_responding, websocket, call_sid, timeout_secs=20):
     """
@@ -675,6 +905,14 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
         return
     try:
         clean_transcript = scrub_pii(transcript)
+
+        # Apply AES-256 to transcript before writing — protects PHI for HIPAA clients
+        # If ENCRYPTION_KEY not set, stores plain text (graceful degradation)
+        stored_transcript = (
+            encrypt_text(clean_transcript[:8000]) if should_encrypt()
+            else clean_transcript[:8000]
+        )
+
         sb.from_("calls").upsert({
             "twilio_call_sid":  call_sid,
             "business_id":      business_id,
@@ -686,7 +924,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             "status":           "completed",
             "call_status":      "completed",
             "started_at":       start_time_iso or datetime.now(timezone.utc).isoformat(),
-            "transcript_summary": clean_transcript[:8000],
+            "transcript_summary": stored_transcript,
         }, on_conflict="twilio_call_sid").execute()
 
         # Fetch call_id for AUP analysis
@@ -718,7 +956,23 @@ async def trigger_aup_analysis(call_id: str, business_id: str, transcript: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "aria-call-handler"}
+    """
+    Health check endpoint — monitored by UptimeRobot every 1 minute.
+    Returns 200 OK with status details when operational.
+    UptimeRobot alert fires if this returns non-200 or times out.
+    """
+    from datetime import datetime, timezone as _tz
+    sb_ok = bool(get_sb())
+    return {
+        "status":    "operational",
+        "service":   "aria-call-handler",
+        "timestamp": datetime.now(_tz.utc).isoformat(),
+        "checks": {
+            "supabase": "connected" if sb_ok else "degraded",
+            "openai":   "configured" if os.environ.get("OPENAI_API_KEY") else "missing",
+            "twilio":   "configured" if os.environ.get("TWILIO_ACCOUNT_SID") else "missing",
+        }
+    }
 
 @app.post("/twilio-incoming")
 async def twilio_incoming(request: Request):
@@ -760,8 +1014,10 @@ async def media_stream(websocket: WebSocket):
     business_cfg  = {}
     business_id   = ""
     max_call_mins = 10   # default — overridden from DB once start event fires
-    is_responding  = False  # True while OpenAI is generating audio — guards response.cancel
-    last_speech_at = None  # timestamp of last caller speech — for silence timeout
+    is_responding       = False  # True while OpenAI is generating audio — guards response.cancel
+    last_speech_at      = None   # timestamp of last caller speech — for silence timeout
+    current_item_id     = None   # OpenAI assistant message ID (for truncation on barge-in)
+    audio_ms_sent       = 0      # Milliseconds of audio sent to Twilio (for accurate truncation)
 
     openai_ws = None
 
@@ -861,6 +1117,25 @@ async def media_stream(websocket: WebSocket):
                     # Business address
                     address = settings.get("address") or ""
 
+                    # ── Compliance: recording announcement ────────────────────
+                    announce_recording = settings.get("announce_recording", True)  # default ON
+                    consent_text = (
+                        settings.get("recording_consent_text") or
+                        "This call is being recorded and processed by AI."
+                    )
+
+                    if announce_recording:
+                        compliance_rule = (
+                            f"MANDATORY: Begin every call by saying exactly:\n"
+                            f"\"{consent_text}\"\n"
+                            f"Say this BEFORE anything else, even before your greeting."
+                        )
+                    else:
+                        compliance_rule = (
+                            "The business has verified their state's recording laws and opted out "
+                            "of the recording announcement. Start the call naturally."
+                        )
+
                     # Detect if this is Receptionist.co's own demo line
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
                     opening = (
@@ -879,7 +1154,7 @@ async def media_stream(websocket: WebSocket):
                     system_prompt = SYSTEM_PROMPT_BASE.format(
                         business_name=biz_name,
                         aria_name=aria_name,
-                        custom_instructions=custom_instr,
+                        custom_instructions=compliance_rule + "\n\n" + custom_instr,
                         datetime=datetime.now(ZoneInfo(tz)).strftime("%A %B %d %Y %I:%M %p %Z"),
                         timezone=tz,
                         opening_greeting=opening,
@@ -910,6 +1185,62 @@ async def media_stream(websocket: WebSocket):
                             "instructions": system_prompt,
                             "modalities":   ["text", "audio"],
                             "temperature":  0.7,
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "check_availability",
+                                    "description": "Check the business calendar for available appointment times on a specific date.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "date": {
+                                                "type": "string",
+                                                "description": "The date to check, formatted as YYYY-MM-DD."
+                                            },
+                                            "preference": {
+                                                "type": "string",
+                                                "enum": ["morning", "afternoon", "any"],
+                                                "description": "Caller's preferred time of day."
+                                            }
+                                        },
+                                        "required": ["date"]
+                                    }
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "transfer_call",
+                                    "description": "Transfer the call to a human immediately. Use when caller has a true emergency, repeatedly demands to speak to a human, or the situation requires human judgment. Tell caller 'Please hold while I connect you' BEFORE calling this function.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reason": {
+                                                "type": "string",
+                                                "description": "Short 3-5 word summary of why transferring (e.g. 'Burst pipe in basement')"
+                                            }
+                                        },
+                                        "required": ["reason"]
+                                    }
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "book_appointment",
+                                    "description": "Book an appointment after caller confirms a time. Requires name, email, phone, and startTime.",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {
+                                            "startTime": {
+                                                "type": "string",
+                                                "description": "Start time in ISO 8601 format e.g. 2026-04-02T14:00:00Z"
+                                            },
+                                            "name":  {"type": "string"},
+                                            "email": {"type": "string"},
+                                            "phone": {"type": "string"}
+                                        },
+                                        "required": ["startTime", "name", "email", "phone"]
+                                    }
+                                }
+                            ],
+                            "tool_choice": "auto",
                         }
                     }))
 
@@ -951,6 +1282,10 @@ async def media_stream(websocket: WebSocket):
 
                 if event_type == "response.audio.delta" and data.get("delta"):
                     is_responding = True
+                    if not current_item_id:
+                        current_item_id = data.get("item_id")
+                    # Track ~ms of audio sent (g711_ulaw = 8 bytes/ms)
+                    audio_ms_sent += len(data["delta"]) * 3 // 4 // 8
                     await websocket.send_text(json.dumps({
                         "event":     "media",
                         "streamSid": stream_sid,
@@ -977,11 +1312,53 @@ async def media_stream(websocket: WebSocket):
                         transcript.append(f"Caller: {text}")
                         last_speech_at = datetime.now(timezone.utc)
 
+                elif event_type == "response.function_call_arguments.done":
+                    # Aria wants to call a tool — handle it
+                    fn_name = data.get("name", "")
+                    fn_args_raw = data.get("arguments", "{}")
+                    call_item_id = data.get("call_id", "")
+                    try:
+                        import json as _json
+                        fn_args = _json.loads(fn_args_raw)
+                    except Exception:
+                        fn_args = {}
+                    logger.info(f"Function call: {fn_name}({fn_args})")
+                    result_text = await handle_function_call(fn_name, fn_args, business_id, to_number)
+                    # Feed result back to OpenAI so Aria can speak it
+                    await openai_ws.send(_json.dumps({
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type":    "function_call_output",
+                            "call_id": call_item_id,
+                            "output":  result_text,
+                        }
+                    }))
+                    await openai_ws.send(_json.dumps({"type": "response.create"}))
+
                 elif event_type == "input_audio_buffer.speech_started":
-                    # Only cancel if Aria is actively generating (prevents response_cancel_not_active spam)
+                    # Two-step interruption handshake:
+                    # 1. Tell Twilio to dump its audio buffer (stops Aria mid-syllable)
+                    # 2. Tell OpenAI to cancel if actively generating
+                    await websocket.send_text(json.dumps({
+                        "event":     "clear",
+                        "streamSid": stream_sid,
+                    }))
                     if is_responding:
                         is_responding = False
                         await openai_ws.send(json.dumps({"type": "response.cancel"}))
+                        # Truncate transcript so OpenAI knows where it was cut off
+                        if current_item_id:
+                            try:
+                                await openai_ws.send(json.dumps({
+                                    "type":          "conversation.item.truncate",
+                                    "item_id":       current_item_id,
+                                    "content_index": 0,
+                                    "audio_end_ms":  audio_ms_sent,
+                                }))
+                            except Exception:
+                                pass
+                        current_item_id = None
+                        audio_ms_sent   = 0
 
                 elif event_type == "error":
                     logger.error(f"OpenAI error: {data}")

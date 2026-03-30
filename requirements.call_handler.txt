@@ -27,3 +27,4 @@ twilio==9.3.0
 # NOTE: livekit-agents/silero/simli intentionally excluded --
 # those live in the aria_agent service only.
 # railway_security.py is a local file -- no pip install needed.
+cryptography==42.0.5
