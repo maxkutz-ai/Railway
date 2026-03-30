@@ -306,6 +306,16 @@ def build_memory_block(memories: list) -> str:
     return "\n".join(lines)
 
 
+async def delete_active_call(call_sid: str):
+    """Delete active call row on hang-up — keeps the table lean and triggers DELETE Realtime event."""
+    sb = get_sb()
+    if not sb or not call_sid:
+        return
+    try:
+        sb.from_("active_calls").delete().eq("call_sid", call_sid).execute()
+    except Exception as e:
+        logger.warning(f"active_calls delete failed (non-critical): {e}")
+
 async def upsert_active_call(business_id: str, call_sid: str, from_number: str, status: str, transcript_turns: list = None):
     """Write/update active call in Supabase so the dashboard live counter works."""
     sb = get_sb()
@@ -664,8 +674,8 @@ async def media_stream(websocket: WebSocket):
             asyncio.create_task(
                 save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat())
             )
-            # Mark active call as completed (removes from live counter)
-            asyncio.create_task(upsert_active_call(business_id, call_sid, from_number, "completed"))
+            # DELETE active call row (removes from live counter, keeps active_calls table lean)
+            asyncio.create_task(delete_active_call(call_sid))
         if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
         logger.info(f"Call ended: {call_sid} ({len(transcript)} turns)")
