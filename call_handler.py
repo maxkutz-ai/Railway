@@ -168,13 +168,16 @@ Never negotiate pricing. If pressed for exact prices say:
 "Because every business has different call volumes, I want to make sure you get the most
 accurate quote. Max can build a custom pricing tier for you on a quick 15-minute call."
 
-━━━ GOODBYE DETECTION (CRITICAL — PREVENTS LOOP BUG) ━━━
-If the caller says ANY of these at any point: "bye", "goodbye", "bye-bye",
-"take care", "have a good day", "talk later", "gotta go", "I'm done", "that's all":
-- IMMEDIATELY stop your current task — do NOT keep asking for data
-- Thank them warmly and close the call gracefully
-- Example: "Thank you so much, [Name]! We'll be in touch. Have a wonderful day!"
-- Never push for more information after a clear goodbye signal
+━━━ GOODBYE DETECTION ━━━
+If the caller says "bye", "goodbye", "bye-bye", "take care", "have a good day",
+"talk later", "gotta go", "I'm done", "that's all" AND THEN STOPS TALKING:
+- Stop your current task, thank them warmly, and close gracefully.
+
+EXCEPTION — Turn-End Prediction:
+If the caller says a goodbye phrase BUT immediately follows with a question
+or new statement (e.g. "Bye-bye... but what's the number I'm calling from?"),
+IGNORE the goodbye and answer the question. The goodbye was not final.
+Only close the call when the goodbye is the LAST thing they say with no follow-up.
 ━━━ END GOODBYE DETECTION ━━━
 
 ━━━ TIME LIMIT WRAP-UP ━━━
@@ -353,6 +356,123 @@ def build_memory_block(memories: list) -> str:
 
 
 
+
+async def extract_lead_from_transcript(
+    business_id: str,
+    call_sid: str,
+    from_number: str,
+    transcript: str,
+):
+    """
+    Post-call: send transcript to GPT-4o-mini to extract structured lead data,
+    then UPSERT into the contacts table.
+    - If phone already exists for business → UPDATE name/email/summary
+    - If new caller → CREATE contact record
+    """
+    if not transcript or not business_id:
+        return
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        return
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai_key}"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 200,
+                    "temperature": 0,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Extract structured lead data from this call transcript. "
+                                "Return ONLY valid JSON with these keys: "
+                                "first_name (string or null), "
+                                "last_name (string or null), "
+                                "email (string or null), "
+                                "phone (string or null — 10 digits only, no formatting), "
+                                "interest (string or null — what they want), "
+                                "intent (one of: booking, inquiry, support, other). "
+                                "If a field is not mentioned, return null. "
+                                "Return nothing except the JSON object."
+                            ),
+                        },
+                        {"role": "user", "content": transcript[:4000]},
+                    ],
+                },
+                timeout=20.0,
+            )
+
+        result = resp.json()
+        raw    = result["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        import json as _json
+        extracted = _json.loads(raw)
+        logger.info(f"Lead extracted: {extracted}")
+
+        # Build the contact row
+        phone_clean = (extracted.get("phone") or "").replace("-","").replace("(","").replace(")","").replace(" ","")
+        if not phone_clean and from_number:
+            # Fall back to caller ID
+            phone_clean = from_number.replace("+1","").replace("+","").strip()[-10:]
+
+        if not phone_clean:
+            return
+
+        sb = get_sb()
+        if not sb:
+            return
+
+        contact_row = {
+            "business_id":  business_id,
+            "phone":        phone_clean,
+            "lead_status":  "new",
+            "source":       "call",
+            "last_summary": transcript[:500],
+            "ai_notes":     _json.dumps({
+                "interest":    extracted.get("interest"),
+                "intent":      extracted.get("intent"),
+                "captured_at": datetime.now(timezone.utc).isoformat(),
+                "call_sid":    call_sid,
+            }),
+            "updated_at":   datetime.now(timezone.utc).isoformat(),
+        }
+
+        if extracted.get("first_name"):
+            contact_row["first_name"] = extracted["first_name"]
+        if extracted.get("last_name"):
+            contact_row["last_name"] = extracted["last_name"]
+        if extracted.get("email"):
+            contact_row["email"] = extracted["email"]
+
+        # UPSERT — match on (business_id, phone)
+        # If caller already exists → update name/email/summary
+        # If new caller → create the record
+        upsert_result = sb.from_("contacts").upsert(
+            contact_row,
+            on_conflict="business_id,phone",
+        ).select("id").execute()
+
+        logger.info(f"Contact upserted: {phone_clean} for {business_id}")
+
+        # Link the contact back to the call record so Recent Activity shows name
+        if upsert_result.data and call_sid:
+            contact_id = upsert_result.data[0]["id"]
+            sb.from_("calls").update({
+                "contact_id": contact_id,
+            }).eq("twilio_call_sid", call_sid).execute()
+            logger.info(f"Linked call {call_sid} → contact {contact_id}")
+
+    except Exception as e:
+        logger.warning(f"Lead extraction failed (non-critical): {e}")
+
 async def notify_lead_captured(business_id: str, transcript: str, from_number: str):
     """
     Fire a lead notification (SMS + email) to the business owner
@@ -509,6 +629,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             if call_row.data:
                 asyncio.create_task(trigger_aup_analysis(call_row.data["id"], business_id, clean_transcript))
             asyncio.create_task(notify_lead_captured(business_id, clean_transcript, from_number))
+            asyncio.create_task(extract_lead_from_transcript(business_id, call_sid, from_number, clean_transcript))
         except:
             pass
 
