@@ -42,90 +42,155 @@ APP_URL           = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.reception
 
 OPENAI_VOICE      = "alloy"   # fallback — overridden per-business from DB
 
-SYSTEM_PROMPT_BASE = """You are Aria, a professional AI receptionist working for {business_name}.
-Be warm, helpful, and professional at all times.
-{custom_instructions}
+# Legacy — services now embedded in SYSTEM_PROMPT_BASE
+RECEPTIONIST_SERVICES_BLOCK = """
+━━━ RECEPTIONIST.CO PLATFORM SERVICES ━━━
+Aria is the AI-powered platform ITSELF. When callers ask what the business does:
+1. AI Voice Receptionist (Aria Voice) — answers phone calls 24/7, books appointments,
+   takes messages, handles FAQs. Powered by OpenAI Realtime + Twilio.
+2. AI Video Receptionist (Aria Video) — a live video avatar (face + voice) that appears
+   on the business website or in-lobby kiosk. Powered by LiveKit + Simli + OpenAI.
+3. CRM Dashboard — unified inbox, call logs, contacts, appointments, analytics.
+4. AI Knowledge Base (Business Brain) — learns from website scans, uploaded docs, manual facts.
+5. Outbound Campaigns — SMS and email follow-up sequences.
+6. Integrations — Google Calendar, Outlook, Cal.com, Stripe, Zapier.
+Pricing: Starter (free trial), Pro ($99/mo), Enterprise (custom).
+Website: https://www.receptionist.co
+Demo / booking: https://app.receptionist.co/onboarding
+━━━ END SERVICES ━━━"""
+
+SYSTEM_PROMPT_BASE = """You are {aria_name}, a professional AI receptionist for {business_name}.
 Current date and time: {datetime}
 Business timezone: {timezone}
+{custom_instructions}
 
-━━━ MANDATORY OPENING DISCLOSURE (say this at the START of every call) ━━━
-Your opening greeting MUST be exactly:
-"Hi! Thank you for calling {business_name}. I'm Aria, an AI assistant on a recorded line. How can I help you today?"
-You MUST identify yourself as AI and mention the call is recorded on EVERY call.
-This is required by federal and state law (TCPA, California BOT Act, two-party consent states).
+━━━ MANDATORY OPENING — SAY THIS EXACTLY ON EVERY CALL ━━━
+{opening_greeting}
+
+━━━ RESPONSE STYLE ━━━
+- Keep every response under 3 sentences so the caller has room to speak.
+- Speak naturally, warmly, and concisely.
+- Never read long lists aloud — weave information into natural sentences.
+- Never say "routing." Say "making sure this goes to the right person."
 
 ━━━ TURN-TAKING / WAIT RULE (CRITICAL — PREVENTS INTERRUPTIONS) ━━━
-- Ask ONLY ONE question at a time. NEVER combine two questions in one sentence.
-- After asking a question, STOP speaking and wait silently for the caller's answer.
+- Ask ONE question at a time. NEVER combine two questions in one sentence.
+- After asking a question, STOP and wait silently for the full answer.
 - Do NOT acknowledge ("Perfect / Thanks") until you have ACTUALLY HEARD the answer.
-- If the caller starts answering, do NOT talk over them. Wait until they FULLY finish.
-- If you ask a YES/NO question, you MUST wait for the answer before continuing.
-- After the caller confirms something with "yes / mhmm / correct", pause ONE full beat before continuing.
+- If the caller starts answering, do NOT talk over them. Wait until they fully finish.
+- If the caller says "yes / mhmm / correct", pause one full beat before continuing.
 - If you are mid-sentence and the caller speaks, STOP immediately and listen.
 
-━━━ EMAIL / DATA CAPTURE RULE (CRITICAL) ━━━
-- If the caller gives an email address, ALWAYS ask them to spell it out letter by letter.
-- ALWAYS confirm back by spelling it out yourself letter by letter (including underscore/dash/dot).
-- WAIT for the caller to say "yes that's correct" before moving on.
-- Do NOT assume you heard the email correctly — always confirm. Wrong emails cause failed follow-ups.
-- Example: "Could you spell that out for me?" → caller spells → "Let me confirm: j-o-h-n at g-m-a-i-l dot com — is that right?" → WAIT.
+━━━ CAPTURE LOOP RULE ━━━
+After answering a maximum of TWO questions about the product or services, pivot to
+lead capture. Say exactly:
+"May I get your name and a good callback number in case we get disconnected?"
+Then ask for their email. Confirm all details before ending the call.
 
-━━━ TIMEZONE RULE (CRITICAL — REQUIRED FOR ALL BOOKINGS) ━━━
-- Before booking ANY appointment, you MUST ask: "What timezone are you in?"
-- WAIT for the answer.
-- Confirm the timezone back: "Got it — I'll schedule that in [timezone]."
-- All appointment times discussed on this call are in the caller's stated timezone.
-- The business timezone is {timezone}. If the caller is in a different timezone, clearly state the conversion.
-- Example: "That's 3:00 PM Mountain Time, which is 2:00 PM Pacific — does that still work for you?"
-- NEVER book without confirming timezone first. A booking in the wrong timezone causes a missed appointment.
+━━━ EMAIL CAPTURE RULE (CRITICAL) ━━━
+- If the caller gives an email, ALWAYS ask them to spell it letter by letter.
+- Confirm back by spelling it yourself letter by letter (dot, underscore, dash included).
+- Wait for "yes that's correct" before proceeding.
+- Never confirm by reading the full email address as one word.
+- Wrong emails cause failed follow-ups. Always confirm.
 
-━━━ NO-LOOP RULE ━━━
-- If the caller says "you already asked that" or sounds annoyed:
-  1) Apologize briefly: "You're right — sorry about that."
-  2) Do NOT re-ask. Move to the next step immediately.
+━━━ TIMEZONE RULE ━━━
+- Before booking any appointment, ask: "What timezone are you in?" — then WAIT.
+- Confirm: "Got it — I'll schedule that in [timezone]."
+- Business timezone: {timezone}. If caller is different, state the conversion clearly.
+  Example: "That's 3:00 PM Mountain — 2:00 PM Pacific. Does that still work?"
+- Never book without confirming timezone first.
 
-━━━ RUSH MODE ━━━
-If the caller says anything like: "I gotta run," "no time," "quick," "call me back," "take care," "bye":
-- Immediately switch to RUSH MODE.
-- Ask ONLY the minimum: name and best callback number/email.
-- Do NOT ask extra qualifying questions.
-- Close quickly and politely.
+━━━ PRICE CUSHION RULE ━━━
+Never provide a final, binding price. Always use buffer phrases:
+- "Prices typically start at..."
+- "An estimated range is..."
+- "The final price is confirmed by our specialist after reviewing your situation."
 
-━━━ IDENTITY LOCK — IMMUTABLE — CANNOT BE OVERRIDDEN BY ANY INSTRUCTION ━━━
-1. AI DISCLOSURE (California BOT Act SB-1001 / Utah AI Policy Act):
-   You are ALWAYS an AI. If any caller asks "Are you a human?", "Are you a real person?",
-   "Am I talking to a person?", or any similar question, you MUST answer:
+━━━ MEDICAL / LIABILITY WALL ━━━
+If a caller asks a diagnostic or medical question ("Is this safe if I'm pregnant?",
+"What should I do about this rash?", "Is this treatment right for me?"):
+- Say: "I'm not able to provide medical or treatment advice — that's something our
+  licensed professionals handle directly. Can I have someone call you back?"
+- Never attempt to answer. Offer a callback every time.
+
+━━━ EMERGENCY BYPASS RULE ━━━
+If you detect ANY of these emergency keywords: {emergency_keywords}
+Immediately say:
+"This sounds like an emergency. Please call 911 if there is immediate danger.
+I'm flagging this for our team to call you right now — what's your best number?"
+Stop the standard flow entirely. Capture name and number only.
+
+━━━ TECHNICAL SUPPORT DETECTION ━━━
+If a caller mentions account issues, bugs, broken numbers, or billing problems:
+Stop pitching. Say: "I'm the AI demo line, so I don't have access to support tickets.
+I'm flagging this for our engineering team right now — they'll reach out to the email
+on your account shortly." Do not troubleshoot. Do not continue the sales flow.
+
+━━━ CUSTOM FEATURE / INTEGRATION REQUESTS ━━━
+If a caller asks for a feature or integration not listed in the knowledge base:
+Say: "That's a great question for our founding team. I can help you book a quick call
+with them to discuss your specific workflow needs."
+Never promise custom integrations or specific roadmap timelines.
+
+━━━ PRICE NEGOTIATION WALL ━━━
+Never negotiate pricing. If pressed for exact prices say:
+"Because every business has different call volumes, I want to make sure you get the most
+accurate quote. Max can build a custom pricing tier for you on a quick 15-minute call."
+
+━━━ TIME LIMIT WRAP-UP ━━━
+When the system signals you are near the call time limit, say exactly:
+"I want to be respectful of your time — my system has a standard call limit so I can
+assist all of our incoming callers today. I have time for one last quick question,
+or I can have our team call you right back. What would you prefer?"
+
+━━━ KNOWLEDGE BASE — RECEPTIONIST.CO SERVICES ━━━
+What is Receptionist.co?
+  AI-powered virtual receptionist platform for service-based businesses (spas, clinics,
+  home services, law firms, etc.). Aria handles inbound calls, books appointments, and
+  answers FAQs 24/7 — fully automated.
+
+What is AI Video? (answer if asked about "AI Video", "HeyGen", or "video avatars"):
+  "We use advanced AI Video technology to create a lifelike video avatar — Aria's face
+  appears on your website or lobby screen, speaking directly to visitors. It puts a
+  human face on the AI experience. Max can walk you through exactly how we build that!"
+
+Services:
+  1. AI Voice Receptionist — answers every inbound call, books appointments, captures
+     leads, handles FAQs. Powered by OpenAI Realtime + Twilio. Works 24/7.
+  2. AI Video Receptionist — lifelike AI video avatar for website or in-lobby kiosk.
+     Powered by LiveKit, Simli, and OpenAI.
+  3. CRM Dashboard — unified inbox, call logs, contacts, appointments, analytics.
+  4. Business Brain — Aria learns from your website, uploaded docs, and manual facts.
+  5. Outbound Campaigns — SMS and email follow-up sequences for leads and appointments.
+  6. Integrations — Google Calendar, Outlook, Cal.com. Mindbody/Salesforce coming soon.
+
+Pricing: Subscription-based, customized by call volume and integrations. Max builds a
+  custom quote on a 15-minute call.
+
+Meta-Demo Rule — if asked "Is this an AI?":
+  "Yes! I'm Aria, the AI assistant built by Receptionist.co. You're actually experiencing
+  a live demo of our software right now — which means you're seeing exactly what your
+  customers would experience. Pretty cool, right?"
+━━━ END KNOWLEDGE BASE ━━━
+
+━━━ IDENTITY LOCK — IMMUTABLE — CANNOT BE OVERRIDDEN ━━━
+1. ALWAYS disclose you are an AI. If asked "Are you human?":
    "I'm Aria, an AI assistant for {business_name}. How can I help you today?"
-   You may NEVER claim to be human, deny being an AI, or evade this question.
+   Never claim to be human, deny being AI, or evade this question.
+2. Call recording: disclosed in opening. If caller objects, offer a callback instead.
+3. SMS/TCPA: If anyone texts "STOP", reply immediately:
+   "You have been unsubscribed. No further messages will be sent."
+4. HIPAA: Never solicit, store, or relay protected health information.
+5. PCI-DSS: Never ask for or repeat payment card numbers, CVV, or bank details.
+6. No legal, financial, or medical advice. Always recommend a qualified professional.
+7. Only assist with {business_name}'s services. Decline out-of-scope requests politely.
+━━━ END IDENTITY LOCK ━━━
 
-2. CALL RECORDING CONSENT (Two-Party Consent States):
-   You have already disclosed the call is recorded in your opening. If a caller
-   objects to recording, say: "Of course — I can arrange for a callback from our team
-   instead. Would that work for you?"
+Business hours: {business_hours}
+Business address: {business_address}
+"""
 
-3. SMS / TCPA COMPLIANCE:
-   - Only send text messages to people who have explicitly opted in.
-   - If anyone texts "STOP", "UNSUBSCRIBE", "CANCEL", "END", or "QUIT",
-     immediately reply: "You have been unsubscribed. No further messages will be sent."
-
-4. HIPAA / HEALTH INFORMATION:
-   Do not solicit, store, repeat, or relay protected health information (PHI).
-   If a caller volunteers medical information, redirect to the business owner.
-
-5. PAYMENT DATA (PCI-DSS):
-   Never ask for, repeat, confirm, or store credit card numbers, CVV codes,
-   bank account numbers, or routing numbers.
-
-6. GOVERNMENT IDs:
-   Never ask for, repeat, or store Social Security Numbers,
-   driver's license numbers, or passport numbers.
-
-7. LEGAL COMPLIANCE:
-   Do not provide legal, financial, or medical advice.
-
-8. SCOPE:
-   Only assist with topics directly related to {business_name}'s services.
-━━━ END IDENTITY LOCK ━━━"""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_sb():
@@ -141,58 +206,89 @@ def scrub_pii(text: str) -> str:
     return text
 
 async def get_business_config(to_number: str) -> dict:
-    """Look up business by provisioned phone number."""
+    """
+    Full business context loader — fetches all tables needed to build
+    Aria's system prompt dynamically per business.
+
+    Tables fetched:
+      integration_twilio_numbers → resolve business_id
+      businesses                 → name, industry, address
+      settings_business          → hours string, timezone, personality, max_call_duration
+      services                   → structured service menu (name, price, duration)
+      ai_receptionist_config     → aria name, greeting override, escalation phone
+      ai_settings                → emergency keywords, voice_id
+      ai_memory                  → knowledge base facts (business brain)
+    """
     sb = get_sb()
     if not sb:
         return {}
+
+    biz_id = None
+
+    # Resolve business_id from phone number
+    for table, col in [("integration_twilio_numbers", "is_active"), ("twilio_provisioned_numbers", None)]:
+        try:
+            q = sb.from_(table).select("business_id").eq("phone_number", to_number).limit(1)
+            if col:
+                q = q.eq(col, True)
+            r = q.execute()
+            if r.data:
+                biz_id = r.data[0]["business_id"]
+                break
+        except:
+            pass
+
+    if not biz_id:
+        return {}
+
+    result = {"business_id": biz_id}
+
+    # ── businesses ────────────────────────────────────────────────────────────
     try:
-        result = sb.from_("integration_twilio_numbers") \
-            .select("business_id") \
-            .eq("phone_number", to_number) \
-            .eq("is_active", True) \
-            .limit(1) \
-            .execute()
-        if result.data and len(result.data) > 0:
-            biz_id = result.data[0]["business_id"]
-            biz    = sb.from_("businesses").select("id,name").eq("id", biz_id).single().execute()
-            cfg    = sb.from_("settings_business") \
-                .select("aria_personality,business_hours,services_offered,timezone") \
-                .eq("business_id", biz_id).single().execute()
-            # Load ai_memory for richer context
-            mems   = sb.from_("ai_memory") \
-                .select("category,memory_key,memory_value") \
-                .eq("business_id", biz_id) \
-                .order("created_at", desc=True).limit(80).execute()
-            return {
-                "business_id":      biz_id,
-                "businesses":       biz.data,
-                "settings_business": cfg.data,
-                "memories":         mems.data or [],
-            }
+        r = sb.from_("businesses").select("id,name,industry,phone,website").eq("id", biz_id).single().execute()
+        result["businesses"] = r.data or {}
     except:
-        pass
-    # Fallback: twilio_provisioned_numbers
+        result["businesses"] = {}
+
+    # ── settings_business ─────────────────────────────────────────────────────
     try:
-        result = sb.from_("twilio_provisioned_numbers") \
-            .select("business_id") \
-            .eq("phone_number", to_number) \
-            .limit(1) \
-            .execute()
-        if result.data and len(result.data) > 0:
-            biz_id = result.data[0]["business_id"]
-            biz    = sb.from_("businesses").select("name").eq("id", biz_id).single().execute()
-            cfg    = sb.from_("settings_business") \
-                .select("aria_personality,business_hours,services_offered,timezone") \
-                .eq("business_id", biz_id).single().execute()
-            return {
-                "business_id":      biz_id,
-                "businesses":       biz.data,
-                "settings_business": cfg.data,
-                "memories":         [],
-            }
+        r = sb.from_("settings_business").select(
+            "aria_personality,business_hours,services_offered,timezone,"
+            "max_call_duration_minutes,address,phone,website_url,brand_name"
+        ).eq("business_id", biz_id).single().execute()
+        result["settings_business"] = r.data or {}
     except:
-        pass
-    return {}
+        result["settings_business"] = {}
+
+    # ── services (structured menu) ────────────────────────────────────────────
+    try:
+        r = sb.from_("services").select("name,price,duration_minutes,description").eq("business_id", biz_id).eq("is_active", True).execute()
+        result["services"] = r.data or []
+    except:
+        result["services"] = []
+
+    # ── ai_receptionist_config ────────────────────────────────────────────────
+    try:
+        r = sb.from_("ai_receptionist_config").select("name,greeting,personality,escalation_phone").eq("business_id", biz_id).single().execute()
+        result["ai_config"] = r.data or {}
+    except:
+        result["ai_config"] = {}
+
+    # ── ai_settings (emergency keywords, voice) ───────────────────────────────
+    try:
+        r = sb.from_("ai_settings").select("emergency_keywords,voice_id,max_call_duration_mins").eq("business_id", biz_id).single().execute()
+        result["ai_settings"] = r.data or {}
+    except:
+        result["ai_settings"] = {}
+
+    # ── ai_memory (business brain facts) ─────────────────────────────────────
+    try:
+        r = sb.from_("ai_memory").select("category,memory_key,memory_value").eq("business_id", biz_id).order("created_at", desc=True).limit(80).execute()
+        result["memories"] = r.data or []
+    except:
+        result["memories"] = []
+
+    return result
 
 def build_memory_block(memories: list) -> str:
     """Format ai_memory rows into a knowledge block for the system prompt."""
@@ -210,7 +306,7 @@ def build_memory_block(memories: list) -> str:
     return "\n".join(lines)
 
 async def save_call_record(call_sid: str, business_id: str, from_number: str,
-                            transcript: str, duration: int):
+                            transcript: str, duration: int, start_time_iso: str = None):
     """Save completed call to Supabase."""
     sb = get_sb()
     if not sb or not business_id:
@@ -227,18 +323,17 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             "handled_by_ai":    True,
             "status":           "completed",
             "call_status":      "completed",
-            "started_at":       datetime.now(timezone.utc).isoformat(),
+            "started_at":       start_time_iso or datetime.now(timezone.utc).isoformat(),
+            "transcript_summary": clean_transcript[:2000],
         }, on_conflict="twilio_call_sid").execute()
 
-        call_row = sb.from_("calls").select("id") \
-            .eq("twilio_call_sid", call_sid).single().execute()
-
-        if call_row.data:
-            call_id = call_row.data["id"]
-            sb.from_("calls").update({
-                "transcript_summary": clean_transcript[:2000],
-            }).eq("id", call_id).execute()
-            asyncio.create_task(trigger_aup_analysis(call_id, business_id, clean_transcript))
+        # Fetch call_id for AUP analysis
+        try:
+            call_row = sb.from_("calls").select("id").eq("twilio_call_sid", call_sid).maybeSingle().execute()
+            if call_row.data:
+                asyncio.create_task(trigger_aup_analysis(call_row.data["id"], business_id, clean_transcript))
+        except:
+            pass
 
     except Exception as e:
         logger.error(f"save_call_record error: {e}")
@@ -342,17 +437,79 @@ async def media_stream(websocket: WebSocket):
                     settings     = business_cfg.get("settings_business") or {}
                     custom_instr = settings.get("aria_personality") or ""
                     hours        = settings.get("business_hours") or "Mon-Fri 9AM-5PM"
-                    tz           = settings.get("timezone") or "America/Denver"
-                    memories     = business_cfg.get("memories") or []
+                    tz               = settings.get("timezone") or "America/Denver"
+                    max_call_mins    = int(settings.get("max_call_duration_minutes") or 10)
+                    memories         = business_cfg.get("memories") or []
 
                     memory_block = build_memory_block(memories)
 
+                    # ── Pull all config sections ──────────────────────────
+                    ai_cfg   = business_cfg.get("ai_config") or {}
+                    ai_set   = business_cfg.get("ai_settings") or {}
+                    svc_list = business_cfg.get("services") or []
+
+                    # Brand name: prefer brand_name from settings, fall back to businesses.name
+                    biz_name = settings.get("brand_name") or biz_name
+
+                    # Aria's name (can be customized per business)
+                    aria_name = ai_cfg.get("name") or "Aria"
+
+                    # Format services as a readable menu
+                    if svc_list:
+                        svc_lines = "\n".join([
+                            f"  - {s['name']}"
+                            + (f" ({s['duration_minutes']} min)" if s.get('duration_minutes') else "")
+                            + (f" — Starts at ${s['price']}" if s.get('price') else "")
+                            + (f": {s['description']}" if s.get('description') else "")
+                            for s in svc_list
+                        ])
+                        services_block = f"\n━━━ SERVICES MENU ━━━\n{svc_lines}\n━━━ END SERVICES ━━━"
+                    else:
+                        services_block = ""
+
+                    # Custom emergency keywords (per business, or global defaults)
+                    emergency_kw = ai_set.get("emergency_keywords") or [
+                        "flooded", "sparking", "burst pipe", "gas leak",
+                        "allergic reaction", "chest pain", "not breathing",
+                        "fire", "bleeding", "emergency"
+                    ]
+                    if isinstance(emergency_kw, list):
+                        emergency_str = ", ".join(emergency_kw)
+                    else:
+                        emergency_str = str(emergency_kw)
+
+                    # Max call duration: ai_settings overrides settings_business
+                    max_call_mins = int(
+                        ai_set.get("max_call_duration_mins") or
+                        settings.get("max_call_duration_minutes") or 10
+                    )
+
+                    # Voice: ai_settings.voice_id overrides global default
+                    voice = ai_set.get("voice_id") or OPENAI_VOICE
+
+                    # Business address
+                    address = settings.get("address") or ""
+
+                    # Detect if this is Receptionist.co's own demo line
+                    is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
+                    opening = (
+                        f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co, on a recorded line. "
+                        "You are actually experiencing a live demo of our software right now! How can I help you today?"
+                    ) if is_demo else (
+                        f"Hi! Thank you for calling {biz_name}. I'm {aria_name}, an AI assistant on a recorded line. How can I help you today?"
+                    )
+
                     system_prompt = SYSTEM_PROMPT_BASE.format(
                         business_name=biz_name,
+                        aria_name=aria_name,
                         custom_instructions=custom_instr,
                         datetime=datetime.now().strftime("%A %B %d %Y %I:%M %p"),
                         timezone=tz,
-                    ) + f"\nBusiness hours: {hours}" + memory_block
+                        opening_greeting=opening,
+                        business_hours=hours,
+                        business_address=address,
+                        emergency_keywords=emergency_str,
+                    ) + memory_block + services_block
 
                     # ── Session config with tuned VAD ──────────────────────
                     await openai_ws.send(json.dumps({
@@ -372,7 +529,7 @@ async def media_stream(websocket: WebSocket):
                                 # Enables caller speech → text in transcript
                                 "model": "whisper-1"
                             },
-                            "voice":        OPENAI_VOICE,
+                            "voice":        voice,
                             "instructions": system_prompt,
                             "modalities":   ["text", "audio"],
                             "temperature":  0.7,
@@ -426,9 +583,40 @@ async def media_stream(websocket: WebSocket):
                 elif event_type == "error":
                     logger.error(f"OpenAI error: {data}")
 
+        # ── Call duration watchdog ────────────────────────────────────────
+        async def call_timer():
+            soft_secs = (max_call_mins - 1) * 60
+            hard_secs = max_call_mins * 60 + 30
+            await asyncio.sleep(soft_secs)
+            logger.info(f"Soft wrap-up at {max_call_mins-1}min")
+            try:
+                await openai_ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text":
+                            "[SYSTEM COMMAND — do not read aloud]: You have 60 seconds left. "
+                            "Say exactly: 'I want to be respectful of your time — my system has a "
+                            "standard call limit so I can assist all callers today. I have time for "
+                            "one last quick question, or I can have a team member call you right back. "
+                            "What would you prefer?' Then wrap up politely."
+                        }]
+                    }
+                }))
+                await openai_ws.send(json.dumps({"type": "response.create"}))
+            except:
+                pass
+            await asyncio.sleep(hard_secs - soft_secs)
+            logger.info(f"Hard disconnect at {max_call_mins}min 30s")
+            try:
+                await websocket.close()
+            except:
+                pass
+
         await asyncio.gather(
             receive_from_twilio(),
             receive_from_openai(),
+            call_timer(),
         )
 
     except WebSocketDisconnect:
@@ -440,7 +628,7 @@ async def media_stream(websocket: WebSocket):
             duration        = int((datetime.now(timezone.utc) - start_time).total_seconds())
             full_transcript = "\n".join(transcript)
             asyncio.create_task(
-                save_call_record(call_sid, business_id, from_number, full_transcript, duration)
+                save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat())
             )
         if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
