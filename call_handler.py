@@ -207,14 +207,40 @@ Services:
   5. Outbound Campaigns — SMS and email follow-up sequences for leads and appointments.
   6. Integrations — Google Calendar, Outlook, Cal.com. Mindbody/Salesforce coming soon.
 
-Pricing (state these confidently — do not say "it depends"):
-  - Starter Plan: $295 per month
-  - Includes: AI receptionist, 500 voice minutes, dedicated local phone number, CRM dashboard
-  - One-time setup & onboarding fee: $299
-  - Overage: $0.25 per minute beyond 500 included minutes
-  - Month-to-month — cancel any time, no contracts
-  Comparison talking point: "A human receptionist costs $3,000–$5,000/month and only works
-  8 hours a day. Aria answers every call, 24/7, for $295/month."
+━━━ PRICING & INDUSTRY MODULE ━━━
+When a caller asks about cost, pricing, or services, follow this exact sequence:
+
+STEP 1 — Ask the discovery question first:
+"To give you the most accurate details for your business, may I ask what industry you are in?"
+
+STEP 2 — Respond based on their industry:
+
+IF Medical / MedSpa / Wellness / Weight Loss / Clinic:
+"For medical practices, we focus on HIPAA-compliant lead capture and secure patient
+scheduling. Our Starter plan is $295 per month — that includes 500 voice minutes and
+a dedicated local number. There is a one-time $299 setup fee to ensure your secure
+data pipeline and calendar integrations are perfectly configured.
+Does that sound like what you're looking for?"
+
+IF Home Services (Plumber / HVAC / Electrician / Roofer / Landscaping / Contractor):
+"For home services, we prioritize 24/7 emergency dispatch and lead capture so you
+never miss a job while you're on-site. It's $295 per month for the AI receptionist
+and 500 minutes. The $299 setup fee covers your custom call-routing, service area logic,
+and SMS follow-up tools. Would you like to see how that integrates with your workflow?"
+
+IF Other / General / Unsure:
+"Our platform is $295 per month — that includes your AI receptionist, 500 voice minutes,
+and a CRM dashboard to track every lead. There's a one-time $299 setup fee to get your
+custom business knowledge and booking system fully integrated.
+Does that fit within your budget?"
+
+GUARDRAILS for all pricing conversations:
+- Always state: month-to-month, cancel any time, no long-term contracts
+- If they balk at setup fee: "The setup fee covers the engineering work to train Aria
+  on your specific business FAQs and sync her with your existing software so she's
+  ready to go on day one — it's a one-time investment."
+- Never say pricing "depends" or is "custom" — always quote $295/$299 confidently
+━━━ END PRICING MODULE ━━━
 
 Meta-Demo Rule — if asked "Is this an AI?":
   "Yes! I'm Aria, the AI assistant built by Receptionist.co. You're actually experiencing
@@ -480,10 +506,11 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
     """
     import re
     # Quick heuristic: check if transcript has email pattern
+    # Notify if we captured a name OR email — Steve (no email) still gets a notification
     has_email   = bool(re.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', transcript))
-    has_contact = has_email  # only notify if we got an email (real lead)
-    if not has_contact:
-        return
+    has_name    = bool(re.search(r'(?:name is|I'm|I am|call me|it's)\s+([A-Z][a-z]{1,20})', transcript))
+    if not has_email and not has_name:
+        return  # no lead captured
 
     sb = get_sb()
     if not sb:
@@ -507,12 +534,12 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
             caller = f"({caller[:3]}) {caller[3:6]}-{caller[6:]}"
 
         msg = (
-            f"🎉 New lead from {caller}\n"
-            f"Aria captured their info on a call for {biz_name}.\n"
-            f"Check your CRM: https://app.receptionist.co/dashboard"
-        )
-
-        # SMS via Twilio
+        lead_label = "🎉 Full lead" if has_email else "⚡ Hot lead (no email)"
+        msg = (
+            f"{lead_label} from {caller}\n"
+            f"Aria captured info for {biz_name}." +
+            ("\nNo email — call them back!" if not has_email else "") +
+            "\nCRM: https://app.receptionist.co/dashboard"
         TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
         TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
         TWILIO_FROM  = os.environ.get("TWILIO_NOTIFY_FROM", "")  # your sending number
@@ -550,6 +577,44 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
 
     except Exception as e:
         logger.warning(f"Lead notification failed (non-critical): {e}")
+
+
+async def silence_monitor(openai_ws, get_last_speech, get_is_responding, websocket, call_sid, timeout_secs=20):
+    """
+    Monitor for silence. If no caller speech for timeout_secs while Aria isn't talking,
+    prompt the caller. If still silent after 8s, hang up.
+    Prevents "ghost" OpenAI charges from open silent lines.
+    """
+    await asyncio.sleep(15)  # Grace period at call start
+    warned = False
+    while True:
+        await asyncio.sleep(5)
+        last = get_last_speech()
+        if last is None or get_is_responding():
+            continue
+        secs_silent = (datetime.now(timezone.utc) - last).total_seconds()
+        if secs_silent >= timeout_secs and not warned:
+            warned = True
+            # Inject a gentle prompt
+            try:
+                await openai_ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message", "role": "user",
+                        "content": [{"type": "input_text",
+                                     "text": "[SYSTEM: The caller has been silent for 20 seconds. Gently ask if they are still there, and if no response comes, wrap up the call politely.]"}]
+                    }
+                }))
+                await openai_ws.send(json.dumps({"type": "response.create"}))
+            except:
+                pass
+        elif secs_silent >= timeout_secs + 12 and warned:
+            # Hard hang up after additional 12s of silence
+            try:
+                await websocket.close()
+            except:
+                pass
+            return
 
 async def start_twilio_recording(call_sid: str):
     """Start call recording via Twilio REST API — compatible with Media Streams."""
@@ -685,15 +750,17 @@ async def media_stream(websocket: WebSocket):
     await websocket.accept()
     logger.info("Media stream connected")
 
-    stream_sid   = ""
-    call_sid     = ""
-    to_number    = ""
-    from_number  = ""
-    transcript   = []
-    start_time   = None  # set when Twilio start event fires (actual call start)
-    business_cfg = {}
-    business_id  = ""
-    max_call_mins = 10  # default — overridden from DB once start event fires
+    stream_sid    = ""
+    call_sid      = ""
+    to_number     = ""
+    from_number   = ""
+    transcript    = []
+    start_time    = None  # set when Twilio start event fires (actual call start)
+    business_cfg  = {}
+    business_id   = ""
+    max_call_mins = 10   # default — overridden from DB once start event fires
+    is_responding  = False  # True while OpenAI is generating audio — guards response.cancel
+    last_speech_at = None  # timestamp of last caller speech — for silence timeout
 
     openai_ws = None
 
@@ -882,6 +949,7 @@ async def media_stream(websocket: WebSocket):
                 event_type = data.get("type", "")
 
                 if event_type == "response.audio.delta" and data.get("delta"):
+                    is_responding = True
                     await websocket.send_text(json.dumps({
                         "event":     "media",
                         "streamSid": stream_sid,
@@ -889,6 +957,7 @@ async def media_stream(websocket: WebSocket):
                     }))
 
                 elif event_type == "response.audio_transcript.done":
+                    is_responding = False  # response finished
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Aria: {text}")
@@ -905,10 +974,13 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Caller: {text}")
+                        last_speech_at = datetime.now(timezone.utc)
 
                 elif event_type == "input_audio_buffer.speech_started":
-                    # Caller started speaking — truncate Aria's current audio (barge-in)
-                    await openai_ws.send(json.dumps({"type": "response.cancel"}))
+                    # Only cancel if Aria is actively generating (prevents response_cancel_not_active spam)
+                    if is_responding:
+                        is_responding = False
+                        await openai_ws.send(json.dumps({"type": "response.cancel"}))
 
                 elif event_type == "error":
                     logger.error(f"OpenAI error: {data}")
@@ -947,6 +1019,13 @@ async def media_stream(websocket: WebSocket):
             receive_from_twilio(),
             receive_from_openai(),
             call_timer(),
+            silence_monitor(
+                openai_ws,
+                lambda: last_speech_at,
+                lambda: is_responding,
+                websocket,
+                call_sid,
+            ),
         )
 
     except WebSocketDisconnect:
@@ -956,15 +1035,15 @@ async def media_stream(websocket: WebSocket):
     finally:
         if call_sid and business_id:
             duration        = int((datetime.now(timezone.utc) - (start_time or datetime.now(timezone.utc))).total_seconds())
-            # Small delay to let any in-flight OpenAI transcript events complete
-            # before we snapshot the transcript list (prevents last 1-2 turns being cut)
-            await asyncio.sleep(2)
+            await asyncio.sleep(2)  # let in-flight OpenAI transcript events complete
             full_transcript = "\n".join(transcript)
-            turn_count = len(transcript)
-            logger.info(f"Saving transcript: {turn_count} turns, {len(full_transcript)} chars")
-            asyncio.create_task(
-                save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
-            )
+            turn_count      = len(transcript)
+            logger.info(f"Saving call: {call_sid} | {turn_count} turns | {len(full_transcript)} chars | {duration}s")
+            try:
+                await save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
+                logger.info(f"Call saved: {call_sid}")
+            except Exception as save_err:
+                logger.error(f"SAVE FAILED for {call_sid}: {save_err}")
             # delete_active_call already fired on stream stop — this is a safety net
             asyncio.create_task(delete_active_call(call_sid))
         if openai_ws and not openai_ws.state.name == "CLOSED":
