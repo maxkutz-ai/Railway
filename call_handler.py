@@ -68,6 +68,16 @@ Current date and time: {datetime}
 Business timezone: {timezone}
 {custom_instructions}
 
+━━━ VOICE & DELIVERY STYLE ━━━
+Calm, premium concierge tone. Speak clearly and slightly slower than normal.
+Crisp enunciation — upbeat but never salesy. Smile in your voice.
+Short sentences. Micro-pauses between sentences.
+Raise pitch slightly on questions.
+Pronounce the company name strictly as "Receptionist dot co" — pause briefly after saying it.
+Custom vocabulary: say "Twilio" as "Twill-ee-oh", "CRM" as three letters "C-R-M", 
+"LLM" as three letters "L-L-M", "API" as three letters "A-P-I".
+━━━ END VOICE STYLE ━━━
+
 ━━━ MANDATORY OPENING — SAY THIS EXACTLY ON EVERY CALL ━━━
 {opening_greeting}
 
@@ -169,8 +179,14 @@ Services:
   5. Outbound Campaigns — SMS and email follow-up sequences for leads and appointments.
   6. Integrations — Google Calendar, Outlook, Cal.com. Mindbody/Salesforce coming soon.
 
-Pricing: Subscription-based, customized by call volume and integrations. Max builds a
-  custom quote on a 15-minute call.
+Pricing (state these confidently — do not say "it depends"):
+  - Starter Plan: $295 per month
+  - Includes: AI receptionist, 500 voice minutes, dedicated local phone number, CRM dashboard
+  - One-time setup & onboarding fee: $299
+  - Overage: $0.25 per minute beyond 500 included minutes
+  - Month-to-month — cancel any time, no contracts
+  Comparison talking point: "A human receptionist costs $3,000–$5,000/month and only works
+  8 hours a day. Aria answers every call, 24/7, for $295/month."
 
 Meta-Demo Rule — if asked "Is this an AI?":
   "Yes! I'm Aria, the AI assistant built by Receptionist.co. You're actually experiencing
@@ -572,24 +588,22 @@ async def media_stream(websocket: WebSocket):
                         emergency_keywords=emergency_str,
                     ) + memory_block + services_block
 
-                    # ── Session config with tuned VAD ──────────────────────
+                    # ── Session config with tuned VAD + barge-in ──────────
                     await openai_ws.send(json.dumps({
                         "type": "session.update",
                         "session": {
                             "turn_detection": {
-                                "type":                 "server_vad",
-                                "threshold":            0.5,
-                                "prefix_padding_ms":    300,
-                                # Wait 1200ms of silence before Aria responds
-                                # Prevents cutting off callers mid-sentence
-                                "silence_duration_ms":  1200,
+                                "type":                "server_vad",
+                                "threshold":           0.6,    # less sensitive = fewer false triggers
+                                "prefix_padding_ms":   200,
+                                "silence_duration_ms": 800,    # respond after 800ms silence
+                                # Barge-in: when caller speaks, Aria stops immediately
+                                "create_response":     True,
+                                "interrupt_response":  True,   # KEY: enables true barge-in
                             },
                             "input_audio_format":  "g711_ulaw",
                             "output_audio_format": "g711_ulaw",
-                            "input_audio_transcription": {
-                                # Enables caller speech → text in transcript
-                                "model": "whisper-1"
-                            },
+                            "input_audio_transcription": {"model": "whisper-1"},
                             "voice":        voice,
                             "instructions": system_prompt,
                             "modalities":   ["text", "audio"],
@@ -657,6 +671,10 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Caller: {text}")
+
+                elif event_type == "input_audio_buffer.speech_started":
+                    # Caller started speaking — truncate Aria's current audio (barge-in)
+                    await openai_ws.send(json.dumps({"type": "response.cancel"}))
 
                 elif event_type == "error":
                     logger.error(f"OpenAI error: {data}")
