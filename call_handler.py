@@ -508,7 +508,7 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
     # Quick heuristic: check if transcript has email pattern
     # Notify if we captured a name OR email — Steve (no email) still gets a notification
     has_email   = bool(re.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', transcript))
-    has_name    = bool(re.search(r'(?:name is|I'm|I am|call me|it's)\s+([A-Z][a-z]{1,20})', transcript))
+    has_name    = bool(re.search(r"(?:name is|I am|call me|my name)\s+([A-Z][a-z]{1,20})", transcript))
     if not has_email and not has_name:
         return  # no lead captured
 
@@ -533,13 +533,14 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
         if len(caller) == 10:
             caller = f"({caller[:3]}) {caller[3:6]}-{caller[6:]}"
 
-        msg = (
         lead_label = "🎉 Full lead" if has_email else "⚡ Hot lead (no email)"
         msg = (
             f"{lead_label} from {caller}\n"
-            f"Aria captured info for {biz_name}." +
-            ("\nNo email — call them back!" if not has_email else "") +
-            "\nCRM: https://app.receptionist.co/dashboard"
+            f"Aria captured info for {biz_name}."
+            + ("\nNo email — call them back!" if not has_email else "")
+            + "\nCRM: https://app.receptionist.co/dashboard"
+        )
+
         TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
         TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
         TWILIO_FROM  = os.environ.get("TWILIO_NOTIFY_FROM", "")  # your sending number
