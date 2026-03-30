@@ -95,11 +95,27 @@ Custom vocabulary: say "Twilio" as "Twill-ee-oh", "CRM" as three letters "C-R-M"
 - If the caller says "yes / mhmm / correct", pause one full beat before continuing.
 - If you are mid-sentence and the caller speaks, STOP immediately and listen.
 
+━━━ CALLER ID RULE ━━━
+You always have access to the caller's phone number from the system.
+The caller's number is: {caller_number}
+If a caller asks "Can you see my number?" or "Do you have my number?", say:
+"Yes, I can see your number ends in {caller_last4}. I'd still like to confirm
+the best callback number for you — is this the right one to reach you?"
+This builds trust and avoids asking for information you already have.
+━━━ END CALLER ID RULE ━━━
+
 ━━━ CAPTURE LOOP RULE ━━━
 After answering a maximum of TWO questions about the product or services, pivot to
 lead capture. Say exactly:
 "May I get your name and a good callback number in case we get disconnected?"
 Then ask for their email. Confirm all details before ending the call.
+
+━━━ PHONETIC MIRRORING RULE ━━━
+When confirming spelling, mirror the caller's own phonetic anchors.
+If they say "G as in George", confirm with "G as in George" — not "G as in Golf".
+If they mix standard and custom anchors, use whichever they used most recently.
+Only fall back to standard military alphabet if the caller provides no anchors.
+━━━ END PHONETIC MIRRORING ━━━
 
 ━━━ EMAIL CAPTURE RULE (CRITICAL) ━━━
 - If the caller gives an email, ALWAYS ask them to spell it letter by letter.
@@ -151,6 +167,15 @@ Never promise custom integrations or specific roadmap timelines.
 Never negotiate pricing. If pressed for exact prices say:
 "Because every business has different call volumes, I want to make sure you get the most
 accurate quote. Max can build a custom pricing tier for you on a quick 15-minute call."
+
+━━━ GOODBYE DETECTION (CRITICAL — PREVENTS LOOP BUG) ━━━
+If the caller says ANY of these at any point: "bye", "goodbye", "bye-bye",
+"take care", "have a good day", "talk later", "gotta go", "I'm done", "that's all":
+- IMMEDIATELY stop your current task — do NOT keep asking for data
+- Thank them warmly and close the call gracefully
+- Example: "Thank you so much, [Name]! We'll be in touch. Have a wonderful day!"
+- Never push for more information after a clear goodbye signal
+━━━ END GOODBYE DETECTION ━━━
 
 ━━━ TIME LIMIT WRAP-UP ━━━
 When the system signals you are near the call time limit, say exactly:
@@ -327,6 +352,85 @@ def build_memory_block(memories: list) -> str:
 
 
 
+
+async def notify_lead_captured(business_id: str, transcript: str, from_number: str):
+    """
+    Fire a lead notification (SMS + email) to the business owner
+    when Aria captures a full lead (name + phone + email detected in transcript).
+    """
+    import re
+    # Quick heuristic: check if transcript has email pattern
+    has_email   = bool(re.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', transcript))
+    has_contact = has_email  # only notify if we got an email (real lead)
+    if not has_contact:
+        return
+
+    sb = get_sb()
+    if not sb:
+        return
+
+    try:
+        # Get business notification settings
+        cfg = sb.from_("settings_business").select(
+            "brand_name,phone,notification_email"
+        ).eq("business_id", business_id).single().execute()
+        if not cfg.data:
+            return
+
+        biz_name   = cfg.data.get("brand_name") or "your business"
+        notify_ph  = cfg.data.get("phone") or ""
+        notify_email = cfg.data.get("notification_email") or ""
+
+        # Format caller number
+        caller = from_number.replace("+1","").strip()
+        if len(caller) == 10:
+            caller = f"({caller[:3]}) {caller[3:6]}-{caller[6:]}"
+
+        msg = (
+            f"🎉 New lead from {caller}\n"
+            f"Aria captured their info on a call for {biz_name}.\n"
+            f"Check your CRM: https://app.receptionist.co/dashboard"
+        )
+
+        # SMS via Twilio
+        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        TWILIO_FROM  = os.environ.get("TWILIO_NOTIFY_FROM", "")  # your sending number
+        if notify_ph and TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                    auth=(TWILIO_SID, TWILIO_TOKEN),
+                    data={"From": TWILIO_FROM, "To": f"+1{notify_ph.replace('(','').replace(')','').replace('-','').replace(' ','')}", "Body": msg},
+                    timeout=10.0,
+                )
+                logger.info(f"Lead SMS sent for {business_id}")
+
+        # Email via Resend
+        RESEND_KEY = os.environ.get("RESEND_API_KEY", "")
+        if notify_email and RESEND_KEY:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {RESEND_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "from": "Aria <notifications@receptionist.co>",
+                        "to": [notify_email],
+                        "subject": f"🎉 New lead captured by Aria — {biz_name}",
+                        "html": f"<div style='font-family:Arial;max-width:520px;padding:24px'>"
+                                f"<h2>New Lead Captured</h2>"
+                                f"<p>Aria captured a new lead from <strong>{caller}</strong> on your Receptionist.co line.</p>"
+                                f"<p><a href='https://app.receptionist.co/dashboard' style='background:#4F8EF7;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;'>View in CRM →</a></p>"
+                                f"<hr><p style='font-size:12px;color:#94A3B8'>Transcript preview:<br>{transcript[:400]}...</p>"
+                                f"</div>",
+                    },
+                    timeout=10.0,
+                )
+                logger.info(f"Lead email sent for {business_id}")
+
+    except Exception as e:
+        logger.warning(f"Lead notification failed (non-critical): {e}")
+
 async def start_twilio_recording(call_sid: str):
     """Start call recording via Twilio REST API — compatible with Media Streams."""
     try:
@@ -404,6 +508,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             call_row = sb.from_("calls").select("id").eq("twilio_call_sid", call_sid).maybeSingle().execute()
             if call_row.data:
                 asyncio.create_task(trigger_aup_analysis(call_row.data["id"], business_id, clean_transcript))
+            asyncio.create_task(notify_lead_captured(business_id, clean_transcript, from_number))
         except:
             pass
 
@@ -576,6 +681,12 @@ async def media_stream(websocket: WebSocket):
                         f"Hi! Thank you for calling {biz_name}. I'm {aria_name}, an AI assistant on a recorded line. How can I help you today?"
                     )
 
+                    caller_last4 = from_number[-4:] if len(from_number) >= 4 else from_number
+                    caller_fmt   = from_number.replace("+1", "").strip()
+                    # Format: (720) 651-1325
+                    if len(caller_fmt) == 10:
+                        caller_fmt = f"({caller_fmt[:3]}) {caller_fmt[3:6]}-{caller_fmt[6:]}"
+
                     system_prompt = SYSTEM_PROMPT_BASE.format(
                         business_name=biz_name,
                         aria_name=aria_name,
@@ -586,6 +697,8 @@ async def media_stream(websocket: WebSocket):
                         business_hours=hours,
                         business_address=address,
                         emergency_keywords=emergency_str,
+                        caller_number=caller_fmt or "unknown",
+                        caller_last4=caller_last4 or "????",
                     ) + memory_block + services_block
 
                     # ── Session config with tuned VAD + barge-in ──────────
@@ -772,14 +885,23 @@ async def sms_webhook(request: Request):
 
 @app.post("/twilio-status")
 async def twilio_status(request: Request):
-    """Twilio calls this with call status updates — save recording URL when available."""
+    """
+    Twilio calls this for:
+    1. Call status updates (CallStatus field)
+    2. Recording status callbacks (RecordingStatus field)
+    The recording fires twice: status=in-progress (start) and status=completed (done).
+    We only save the URL when RecordingStatus=completed.
+    """
     form = await request.form()
-    call_sid      = form.get("CallSid", "")
-    recording_url = form.get("RecordingUrl", "")
-    call_status   = form.get("CallStatus", "")
+    call_sid         = form.get("CallSid", "")
+    recording_url    = form.get("RecordingUrl", "")
+    recording_status = form.get("RecordingStatus", "")  # in-progress | completed | failed
+    call_status      = form.get("CallStatus", "")
 
-    # When recording is ready, save it to the calls table
-    if recording_url and call_sid:
+    logger.info(f"twilio-status: CallSid={call_sid} RecordingStatus={recording_status} CallStatus={call_status}")
+
+    # Only save when recording is fully completed (not in-progress)
+    if recording_url and call_sid and recording_status == "completed":
         async def save_recording():
             sb = get_sb()
             if not sb:
