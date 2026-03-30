@@ -310,6 +310,28 @@ def build_memory_block(memories: list) -> str:
     return "\n".join(lines)
 
 
+
+async def start_twilio_recording(call_sid: str):
+    """Start call recording via Twilio REST API — compatible with Media Streams."""
+    try:
+        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        if not TWILIO_SID or not TWILIO_TOKEN:
+            return
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{call_sid}/Recordings.json",
+                auth=(TWILIO_SID, TWILIO_TOKEN),
+                data={
+                    "RecordingStatusCallback": f"{os.environ.get('CALL_HANDLER_URL', '')}/twilio-status",
+                    "RecordingStatusCallbackMethod": "POST",
+                },
+                timeout=10.0,
+            )
+        logger.info(f"Recording started for {call_sid}: {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Recording start failed (non-critical): {e}")
+
 async def delete_active_call(call_sid: str):
     """Delete active call row on hang-up — keeps the table lean and triggers DELETE Realtime event."""
     sb = get_sb()
@@ -406,8 +428,6 @@ async def twilio_incoming(request: Request):
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Record action="/twilio-status" method="POST" recordingStatusCallback="/twilio-status"
-            recordingStatusCallbackMethod="POST" trim="trim-silence"/>
     <Connect>
         <Stream url="{ws_url}">
             <Parameter name="ctx" value="{context_b64}"/>
@@ -467,6 +487,9 @@ async def media_stream(websocket: WebSocket):
 
                     start_time = datetime.now(timezone.utc)  # actual call start
                     logger.info(f"Stream started: {stream_sid} | {from_number} → {to_number}")
+
+                    # Start recording via Twilio REST API (compatible with Media Streams)
+                    asyncio.create_task(start_twilio_recording(call_sid))
 
                     # Load business config + memories
                     business_cfg = await get_business_config(to_number)
