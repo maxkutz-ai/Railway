@@ -1039,6 +1039,7 @@ async def media_stream(websocket: WebSocket):
     business_id   = ""
     max_call_mins = 10   # default — overridden from DB once start event fires
     is_responding       = False  # True while OpenAI is generating audio — guards response.cancel
+    call_active         = True   # set False on stop — prevents post-hangup upserts
     last_speech_at      = None   # timestamp of last caller speech — for silence timeout
     current_item_id     = None   # OpenAI assistant message ID (for truncation on barge-in)
     audio_ms_sent       = 0      # Milliseconds of audio sent to Twilio (for accurate truncation)
@@ -1057,7 +1058,7 @@ async def media_stream(websocket: WebSocket):
         # Register for warm-handoff injection (populated once call_sid is known)
 
         async def receive_from_twilio():
-            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, to_number, from_number
+            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, call_active, to_number, from_number, call_active
             async for message in websocket.iter_text():
                 data  = json.loads(message)
                 event = data.get("event")
