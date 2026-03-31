@@ -1148,7 +1148,49 @@ async def media_stream(websocket: WebSocket):
                             "of the recording announcement. Start the call naturally."
                         )
 
-                    # Detect if this is Receptionist.co's own demo line
+                    # ── Dynamic Medical Vertical Prompting ───────────────────────
+                    biz_info         = business_cfg.get("businesses") or {}
+                    is_medical       = biz_info.get("is_medical_vertical", False)
+                    industry_vert    = settings.get("industry_vertical", "general")
+                    # Also check vertical from settings_business
+                    if industry_vert in ("medical", "dental", "veterinary", "medspa"):
+                        is_medical = True
+
+                    if is_medical:
+                        compliance_rule += (
+                            "\n\nMEDICAL VERTICAL COMPLIANCE RULES (MANDATORY):\n"
+                            "1. EMERGENCY ROUTING: If a caller mentions chest pain, difficulty breathing, "
+                            "severe bleeding, stroke symptoms, or any life-threatening emergency, "
+                            "IMMEDIATELY say: 'This sounds like a medical emergency. Please hang up and "
+                            "call 911 right now.' Do not attempt to book or continue the call.\n"
+                            "2. NEW PATIENT SECURE HOLD: For NEW patients booking medical/aesthetic "
+                            "appointments, do NOT confirm a final booking. Instead say: 'I have "
+                            "tentatively held that slot for you! Because this is a medical appointment, "
+                            "our system requires a quick intake form to finalize the booking. I just "
+                            "texted you the secure link. If you complete it within 30 minutes, it will "
+                            "permanently lock in your time. Otherwise the system will automatically "
+                            "release the hold.' Then trigger the intake SMS.\n"
+                            "3. EXISTING PATIENTS: If the caller is already in the system (has a "
+                            "contact record), you may book directly using the Soft Confirm method.\n"
+                            "4. MINOR PROTECTION: If a caller sounds like or states they are under 18, "
+                            "do NOT book restricted medical/aesthetic services. Say: 'For medical "
+                            "appointments, we require a parent or guardian to call on behalf of anyone "
+                            "under 18. Please have them give us a call and we will get everything set up!'\n"
+                            "5. AGE VERIFICATION: For new patient intakes at medical or aesthetic "
+                            "practices, ask for date of birth as part of the intake process.\n"
+                            "6. NO MEDICAL ADVICE: You are an administrative AI assistant. Never provide "
+                            "medical advice, diagnoses, or treatment recommendations. Always say "
+                            "'I am not able to give medical advice — please speak with your provider.'\n"
+                        )
+                    else:
+                        compliance_rule += (
+                            "\n\nSTANDARD BOOKING RULES:\n"
+                            "You do not need to verify age or collect date of birth. Simply ask for the "
+                            "caller's name, phone number, and preferred appointment time to finalize the "
+                            "booking. Be friendly, efficient, and conversational.\n"
+                        )
+
+                                        # Detect if this is Receptionist.co's own demo line
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
                     opening = (
                         f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co, on a recorded line. "
