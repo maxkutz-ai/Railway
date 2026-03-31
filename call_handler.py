@@ -323,6 +323,13 @@ Business address: {business_address}
 """
 
 
+# ── Active call registry — maps call_sid → live openai_ws connection ──────────
+# Used by /warm-handoff to inject prompts mid-call
+_active_openai_ws: dict = {}   # call_sid -> openai_ws WebSocket
+_active_twilio_ws: dict = {}   # call_sid -> twilio websocket
+_active_stream_sid: dict = {}  # call_sid -> stream_sid
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def get_sb():
     if SUPABASE_URL and SUPABASE_KEY:
@@ -385,7 +392,7 @@ async def get_business_config(to_number: str) -> dict:
     try:
         r = sb.from_("settings_business").select(
             "aria_personality,business_hours,services_offered,timezone,"
-            "max_call_duration_minutes,address,phone,website_url,brand_name,"
+            "max_call_duration_minutes,address,phone,website_url,brand_name,transfer_number,"
             "announce_recording,recording_consent_text"
         ).eq("business_id", biz_id).single().execute()
         result["settings_business"] = r.data or {}
@@ -1030,6 +1037,7 @@ async def media_stream(websocket: WebSocket):
             }
         )
         logger.info("Connected to OpenAI Realtime")
+        # Register for warm-handoff injection (populated once call_sid is known)
 
         async def receive_from_twilio():
             nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, to_number, from_number
@@ -1053,6 +1061,10 @@ async def media_stream(websocket: WebSocket):
 
                     start_time = datetime.now(timezone.utc)  # actual call start
                     logger.info(f"Stream started: {stream_sid} | {from_number} → {to_number}")
+                    # Register in global registry for warm-handoff
+                    _active_openai_ws[call_sid] = openai_ws
+                    _active_twilio_ws[call_sid]  = websocket
+                    _active_stream_sid[call_sid] = stream_sid
 
                     # Start recording via Twilio REST API (compatible with Media Streams)
                     asyncio.create_task(start_twilio_recording(call_sid))
@@ -1443,6 +1455,9 @@ async def media_stream(websocket: WebSocket):
             asyncio.create_task(delete_active_call(call_sid))
         if openai_ws and not openai_ws.state.name == "CLOSED":
             await openai_ws.close()
+        _active_openai_ws.pop(call_sid, None)
+        _active_twilio_ws.pop(call_sid, None)
+        _active_stream_sid.pop(call_sid, None)
         logger.info(f"Call ended: {call_sid} ({len(transcript)} turns)")
 
 
@@ -2053,3 +2068,143 @@ async def appointment_completed_hook(request: Request):
         return JSONResponse({"ok": True, "review_scheduled_in_hours": delay_hours})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Warm Handoff — inject transfer prompt into live OpenAI stream ──────────────
+@app.post("/warm-handoff")
+async def warm_handoff(req: Request):
+    """
+    Staff clicks 'Initiate Warm Transfer' in CRM.
+    Injects a prompt into the live OpenAI Realtime stream asking the caller
+    if they'd like to speak with a specialist. If caller says yes, Aria
+    triggers transfer_to_specialist() function call → Twilio conference bridge.
+    """
+    body = await req.json()
+    call_sid    = body.get("call_sid")
+    script      = body.get("script", "A")  # A=expertise, B=personal
+
+    if not call_sid:
+        return JSONResponse({"ok": False, "error": "call_sid required"}, status_code=400)
+
+    openai_ws = _active_openai_ws.get(call_sid)
+    if not openai_ws:
+        return JSONResponse({"ok": False, "error": "No active OpenAI stream for this call"}, status_code=404)
+
+    # Script options
+    scripts = {
+        "A": "SYSTEM OVERRIDE: Stop your current thought immediately. Say exactly: 'You know what, to make sure you get the exact right information on our pricing and availability for that, let me bring one of our specialists on the line. May I transfer you to them right now?' Then wait for the caller to say yes or no.",
+        "B": "SYSTEM OVERRIDE: Stop your current thought immediately. Say exactly: 'I want to make sure you are fully taken care of with those specific details. Let me grab one of our team members at the front desk to jump in. Is it okay if I connect you now?' Then wait for the caller to say yes or no.",
+    }
+    prompt = scripts.get(script, scripts["A"])
+
+    try:
+        # Cancel any active response first
+        try:
+            await openai_ws.send(json.dumps({"type": "response.cancel"}))
+        except Exception:
+            pass
+
+        # Inject via conversation.item.create (highest priority system message)
+        await openai_ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type":    "message",
+                "role":    "system",
+                "content": [{"type": "input_text", "text": prompt}],
+            }
+        }))
+        # Force a new response so Aria speaks immediately
+        await openai_ws.send(json.dumps({
+            "type": "response.create",
+            "response": {
+                "modalities": ["text", "audio"],
+                "instructions": prompt,
+            }
+        }))
+        logger.info(f"Warm handoff injected for {call_sid} (script {script})")
+        return JSONResponse({"ok": True, "message": "Prompt injected — Aria is asking the caller"})
+    except Exception as e:
+        logger.error(f"Warm handoff injection failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/cancel-handoff")
+async def cancel_handoff(req: Request):
+    """Caller said no — reset Aria to normal conversation."""
+    body = await req.json()
+    call_sid = body.get("call_sid")
+    openai_ws = _active_openai_ws.get(call_sid)
+    if not openai_ws:
+        return JSONResponse({"ok": False, "error": "No active stream"}, status_code=404)
+    try:
+        await openai_ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type":    "message",
+                "role":    "system",
+                "content": [{"type": "input_text", "text": "The caller declined the transfer. Resume the normal conversation naturally, acknowledge their response, and continue helping them."}],
+            }
+        }))
+        await openai_ws.send(json.dumps({"type": "response.create"}))
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/transfer-call")
+async def transfer_call(req: Request):
+    """
+    Caller said yes — use Twilio REST to dial the transfer number.
+    Aria plays final confirmation, then the call is bridged.
+    """
+    body        = await req.json()
+    call_sid    = body.get("call_sid")
+    transfer_to = body.get("transfer_to")  # E.164 phone number
+
+    if not call_sid or not transfer_to:
+        return JSONResponse({"ok": False, "error": "call_sid and transfer_to required"}, status_code=400)
+
+    openai_ws = _active_openai_ws.get(call_sid)
+    twilio_ws  = _active_twilio_ws.get(call_sid)
+
+    if not openai_ws:
+        return JSONResponse({"ok": False, "error": "No active stream"}, status_code=404)
+
+    try:
+        # Step 1: Aria says final farewell
+        await openai_ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type":    "message",
+                "role":    "system",
+                "content": [{"type": "input_text", "text": "Say exactly: 'Great! Connecting you to our specialist right now. One moment please.' Then stop speaking."}],
+            }
+        }))
+        await openai_ws.send(json.dumps({"type": "response.create"}))
+
+        # Step 2: Give Aria 3 seconds to finish speaking, then transfer via Twilio
+        import asyncio
+        await asyncio.sleep(3)
+
+        # Step 3: Use Twilio REST to redirect the call with <Dial>
+        TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        TWILIO_AUTH_TOKEN  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        RAILWAY_PUBLIC_URL = os.environ.get("RAILWAY_PUBLIC_URL", "")
+
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+            import httpx
+            twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial timeout="30" callerId="+18889732377"><Number>{transfer_to}</Number></Dial></Response>'
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Calls/{call_sid}.json",
+                    auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                    data={"Twiml": twiml},
+                )
+
+        logger.info(f"Transfer initiated: {call_sid} → {transfer_to}")
+        return JSONResponse({"ok": True, "message": f"Transferring to {transfer_to}"})
+
+    except Exception as e:
+        logger.error(f"Transfer failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
