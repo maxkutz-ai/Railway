@@ -1,3 +1,4 @@
+# CACHE-BUST: 20260331-052636
 """
 call_handler.py — Twilio Voice ↔ OpenAI Realtime API bridge
 Railway service: aria-call-handler
@@ -961,12 +962,11 @@ async def health():
     Returns 200 OK with status details when operational.
     UptimeRobot alert fires if this returns non-200 or times out.
     """
-    from datetime import datetime, timezone, timedelta, date as _tz
     sb_ok = bool(get_sb())
     return {
         "status":    "operational",
         "service":   "aria-call-handler",
-        "timestamp": datetime.now(_tz.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": {
             "supabase": "connected" if sb_ok else "degraded",
             "openai":   "configured" if os.environ.get("OPENAI_API_KEY") else "missing",
