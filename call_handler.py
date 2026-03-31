@@ -13,6 +13,7 @@ Flow:
 """
 
 import os
+import re
 import json
 import logging
 import asyncio
@@ -751,7 +752,7 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                 return f"Transfer initiated to {transfer_number}. Tell the caller you're connecting them."
             else:
                 logger.warning(f"No emergency transfer number for {business_id}")
-                return "No emergency number on file. Tell the caller: 'I don't have an emergency dispatch number available right now, but I'm marking this as urgent and someone will call you back within minutes. May I confirm the best number to reach you?'"
+                return "No transfer number configured for this account. Tell the caller: 'I'm so sorry — I'm not able to complete the transfer right now as our specialists are temporarily unavailable. Let me take your contact information and ensure someone calls you back within the next few minutes. May I get your name and best callback number?hin minutes. May I confirm the best number to reach you?'"
         except Exception as e:
             logger.warning(f"transfer_call error: {e}")
             return "Transfer system error. Tell the caller you'll have someone call them back immediately and take their number."
@@ -2275,6 +2276,29 @@ async def transfer_call(req: Request):
     if not call_sid or not transfer_to:
         return JSONResponse({"ok": False, "error": "call_sid and transfer_to required"}, status_code=400)
 
+    # ── Normalize transfer number to E.164 ─────────────────────────────────
+    # Strip spaces, dashes, parens
+    raw_num = str(transfer_to).strip()
+    digits  = re.sub(r"\D", "", raw_num)
+
+    # Reject obviously invalid numbers (too short, or just "888" partial)
+    if len(digits) < 10:
+        return JSONResponse({
+            "ok": False,
+            "error": f"Invalid transfer number '{transfer_to}'. Must be a full US phone number like +17205551234. "
+                     f"Please set your transfer number in CRM Settings → Warm Handoff."
+        }, status_code=400)
+
+    # Normalize to E.164
+    if len(digits) == 10:
+        transfer_to = f"+1{digits}"
+    elif len(digits) == 11 and digits[0] == "1":
+        transfer_to = f"+{digits}"
+    else:
+        transfer_to = f"+{digits}"
+    logger.info(f"Transfer number normalized: '{raw_num}' → '{transfer_to}'")
+    # ────────────────────────────────────────────────────────────────────────
+
     openai_ws = _active_openai_ws.get(call_sid)
     twilio_ws  = _active_twilio_ws.get(call_sid)
 
@@ -2317,5 +2341,142 @@ async def transfer_call(req: Request):
 
     except Exception as e:
         logger.error(f"Transfer failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+@app.get("/twilio-token")
+async def twilio_access_token(request: Request):
+    """
+    Generate a Twilio Access Token with Voice grant for browser-based calling.
+    Used by the CRM Live Monitor to enable 'Answer in Browser' via Twilio Client JS.
+    """
+    import base64, hmac, hashlib, time, json as _json_std
+
+    TWILIO_SID      = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    TWILIO_TOKEN    = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    TWILIO_APP_SID  = os.environ.get("TWILIO_TWIML_APP_SID", "")  # TwiML App SID for browser calling
+
+    if not TWILIO_SID or not TWILIO_TOKEN:
+        return JSONResponse({"ok": False, "error": "Twilio not configured"}, status_code=500)
+
+    try:
+        from twilio.jwt.access_token import AccessToken
+        from twilio.jwt.access_token.grants import VoiceGrant
+
+        identity = f"staff-{int(time.time())}"
+        token = AccessToken(TWILIO_SID, TWILIO_APP_SID or TWILIO_SID, TWILIO_TOKEN,
+                           identity=identity, ttl=3600)
+
+        voice_grant = VoiceGrant(
+            outgoing_application_sid=TWILIO_APP_SID or TWILIO_SID,
+            incoming_allow=True,  # allow browser to receive incoming calls
+        )
+        token.add_grant(voice_grant)
+
+        logger.info(f"Twilio Access Token issued for identity {identity}")
+        return JSONResponse({"ok": True, "token": token.to_jwt(), "identity": identity})
+
+    except Exception as e:
+        logger.error(f"Token generation failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/browser-bridge")
+async def browser_bridge(req: Request):
+    """
+    Bridge an active Twilio call into a named conference room so the browser
+    (via Twilio Client) can join as a participant.
+
+    Flow:
+    1. CRM clicks 'Answer in Browser'
+    2. Aria has already asked caller to hold
+    3. We update the caller's call to join a conference via TwiML
+    4. Browser's Twilio.Device connects to the same conference
+    5. Both parties are in the conference — human takes over
+    """
+    body       = await req.json()
+    call_sid   = body.get("call_sid")
+    identity   = body.get("identity", "staff")   # browser's Twilio identity
+
+    if not call_sid:
+        return JSONResponse({"ok": False, "error": "call_sid required"}, status_code=400)
+
+    TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+
+    if not TWILIO_SID or not TWILIO_TOKEN:
+        return JSONResponse({"ok": False, "error": "Twilio not configured"}, status_code=500)
+
+    # Conference room name is deterministic from call_sid
+    conf_room = f"receptionist-bridge-{call_sid[-8:]}"
+
+    try:
+        # Step 1: First have Aria say farewell and stop transcribing
+        openai_ws = _active_openai_ws.get(call_sid)
+        if openai_ws:
+            try:
+                farewell = (
+                    "SYSTEM: The human staff member is now joining the call via their browser. "
+                    "Say: 'Perfect! Please hold for just one moment while I connect you to our specialist.' "
+                    "Then stay silent — the human will take over completely."
+                )
+                await openai_ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": farewell}]}
+                }))
+                await openai_ws.send(json.dumps({"type": "response.create"}))
+                await asyncio.sleep(3)  # let Aria finish speaking
+            except Exception as aria_err:
+                logger.debug(f"Browser bridge Aria farewell: {aria_err}")
+
+        # Step 2: Move caller into conference via Twilio REST
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial>
+        <Conference waitUrl="https://twimlets.com/holdmusic?Bucket=com.twilio.music.soft-rock"
+                    startConferenceOnEnter="false"
+                    endConferenceOnExit="true"
+                    beep="false">
+            {conf_room}
+        </Conference>
+    </Dial>
+</Response>"""
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{call_sid}.json",
+                auth=(TWILIO_SID, TWILIO_TOKEN),
+                data={"Twiml": twiml},
+                timeout=8.0,
+            )
+            if resp.status_code not in (200, 201, 204):
+                logger.warning(f"Browser bridge caller move failed: {resp.status_code} {resp.text[:200]}")
+                return JSONResponse({"ok": False, "error": f"Twilio error {resp.status_code}"}, status_code=502)
+
+        logger.info(f"Browser bridge: {call_sid} → conference room {conf_room}")
+
+        # Step 3: Mark system turn in transcript
+        try:
+            sb = get_sb()
+            if sb:
+                res = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybeSingle().execute()
+                if res.data:
+                    turns = res.data.get("live_transcript") or []
+                    turns.append({
+                        "role": "system",
+                        "text": f"[Browser Bridge: Staff joined via browser at {datetime.now(timezone.utc).strftime('%I:%M %p UTC')}. AI transcription ended.]",
+                        "ts": datetime.now(timezone.utc).isoformat()
+                    })
+                    sb.from_("active_calls").update({"live_transcript": turns, "status": "human-handled"}).eq("call_sid", call_sid).execute()
+        except Exception as db_err:
+            logger.debug(f"Browser bridge DB marker: {db_err}")
+
+        return JSONResponse({
+            "ok": True,
+            "conference_room": conf_room,
+            "message": f"Caller moved to conference room {conf_room}. Connect your browser to join."
+        })
+
+    except Exception as e:
+        logger.error(f"Browser bridge failed: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
