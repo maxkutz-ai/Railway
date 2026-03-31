@@ -17,7 +17,7 @@ import logging
 import asyncio
 import base64
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
 try:
     from encryption import decrypt_api_key, encrypt_text, decrypt_text, should_encrypt
 except ImportError:
@@ -961,7 +961,7 @@ async def health():
     Returns 200 OK with status details when operational.
     UptimeRobot alert fires if this returns non-200 or times out.
     """
-    from datetime import datetime, timezone as _tz
+    from datetime import datetime, timezone, timedelta, date as _tz
     sb_ok = bool(get_sb())
     return {
         "status":    "operational",
@@ -1613,8 +1613,6 @@ async def ping():
 # COMPLIANCE: Only aggregate counts — zero PHI in email body
 # ═══════════════════════════════════════════════════════════════════════════
 
-import datetime
-
 POSTMARK_TOKEN = os.getenv("POSTMARK_SERVER_TOKEN", "")
 CRM_URL        = os.getenv("CRM_BASE_URL", "https://app.receptionist.co")
 
@@ -1785,7 +1783,7 @@ async def send_weekly_reports(request: Request):
 
     try:
         # Query businesses due for a report
-        today = datetime.date.today()
+        today = date.today()
         day_of_week  = today.weekday()  # 0 = Monday
         day_of_month = today.day
 
@@ -1818,7 +1816,7 @@ async def send_weekly_reports(request: Request):
             stats["modules"] = biz.get("report_modules") or {}
 
             # Check not already sent this period
-            period_start = (today - datetime.timedelta(days=today.weekday())).isoformat()
+            period_start = (today - timedelta(days=today.weekday())).isoformat()
             existing = supabase.table("report_log").select("id").eq(
                 "business_id", biz_id
             ).eq("period_start", period_start).eq("frequency", freq).execute()
@@ -1894,8 +1892,8 @@ async def preview_report(business_id: str, request: Request):
         stats = stats_res.data[0] if stats_res.data else {}
         stats["modules"] = biz.get("report_modules") or {}
 
-        today  = datetime.date.today()
-        period = f"Week of {(today - datetime.timedelta(days=7)).isoformat()} – {today.isoformat()}"
+        today  = date.today()
+        period = f"Week of {(today - timedelta(days=7)).isoformat()} – {today.isoformat()}"
         html   = build_roi_email(biz["name"], "", period, stats)
         from starlette.responses import HTMLResponse
         return HTMLResponse(content=html)
@@ -1941,7 +1939,7 @@ async def send_intake_sms(business_id: str, contact_id: str, contact_phone: str,
         client.messages.create(to=contact_phone, from_=from_number, body=msg)
 
         # Log it
-        supabase.table("contacts").update({"intake_sent_at": datetime.datetime.utcnow().isoformat()}).eq(
+        supabase.table("contacts").update({"intake_sent_at": datetime.utcnow().isoformat()}).eq(
             "id", contact_id
         ).execute()
         return True
