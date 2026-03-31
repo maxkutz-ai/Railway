@@ -1298,8 +1298,8 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Aria: {text}")
-                        # Push live transcript every 4 turns for Glass Box
-                        if len(transcript) % 4 == 0 and business_id:
+                        # Push live transcript after every Aria turn for Glass Box
+                        if business_id:
                             turns = [{"role": "ai" if t.startswith("Aria:") else "user",
                                       "text": t.split(": ", 1)[-1], "ts": datetime.now(timezone.utc).isoformat()}
                                      for t in transcript[-20:]]
@@ -1311,6 +1311,14 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Caller: {text}")
+                        # Push caller speech immediately so Glass Box shows it live
+                        if business_id:
+                            _turns = [{"role": "ai" if t.startswith("Aria:") else "user",
+                                       "text": t.split(": ", 1)[-1], "ts": datetime.now(timezone.utc).isoformat()}
+                                      for t in transcript[-20:]]
+                            asyncio.create_task(upsert_active_call(
+                                business_id, call_sid, from_number, "in-progress", _turns
+                            ))
                         last_speech_at = datetime.now(timezone.utc)
 
                 elif event_type == "response.function_call_arguments.done":
