@@ -1032,7 +1032,7 @@ async def media_stream(websocket: WebSocket):
         logger.info("Connected to OpenAI Realtime")
 
         async def receive_from_twilio():
-            nonlocal stream_sid, call_sid, to_number, from_number, business_cfg, business_id
+            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, to_number, from_number
             async for message in websocket.iter_text():
                 data  = json.loads(message)
                 event = data.get("event")
@@ -1276,6 +1276,7 @@ async def media_stream(websocket: WebSocket):
                     break
 
         async def receive_from_openai():
+            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent
             async for raw in openai_ws:
                 data       = json.loads(raw)
                 event_type = data.get("type", "")
