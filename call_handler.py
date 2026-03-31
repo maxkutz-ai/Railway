@@ -1354,9 +1354,12 @@ async def media_stream(websocket: WebSocket):
                     }))
                     if is_responding:
                         is_responding = False
-                        await openai_ws.send(json.dumps({"type": "response.cancel"}))
+                        try:
+                            await openai_ws.send(json.dumps({"type": "response.cancel"}))
+                        except Exception:
+                            pass  # response may have already completed — safe to ignore
                         # Truncate transcript so OpenAI knows where it was cut off
-                        if current_item_id:
+                        if current_item_id and audio_ms_sent > 0:
                             try:
                                 await openai_ws.send(json.dumps({
                                     "type":          "conversation.item.truncate",
@@ -1370,7 +1373,12 @@ async def media_stream(websocket: WebSocket):
                         audio_ms_sent   = 0
 
                 elif event_type == "error":
-                    logger.error(f"OpenAI error: {data}")
+                    # Suppress benign barge-in race conditions
+                    _ec = data.get("error", {}).get("code", "")
+                    if _ec in ("response_cancel_not_active", "invalid_value"):
+                        logger.debug(f"OpenAI barge-in race (ignored): {_ec}")
+                    else:
+                        logger.error(f"OpenAI error: {data}")
 
         # ── Call duration watchdog ────────────────────────────────────────
         async def call_timer():
