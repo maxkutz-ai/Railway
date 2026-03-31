@@ -46,6 +46,22 @@ logger = logging.getLogger("call-handler")
 
 app = FastAPI()
 
+# ── CORS — allow CRM dashboard and local dev to call Railway endpoints ──────
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://crm.receptionist.co",
+        "https://www.receptionist.co",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "*",  # broad allow — Railway is already protected by Twilio signature validation
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ── Environment ───────────────────────────────────────────────────────────────
 OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 SUPABASE_URL      = os.environ.get("SUPABASE_URL", "")
@@ -1017,6 +1033,7 @@ async def media_stream(websocket: WebSocket):
     to_number     = ""
     from_number   = ""
     transcript    = []
+    transcript_turns = []   # [{role, text, ts}] with per-turn timestamps
     start_time    = None  # set when Twilio start event fires (actual call start)
     business_cfg  = {}
     business_id   = ""
@@ -1325,6 +1342,7 @@ async def media_stream(websocket: WebSocket):
                     logger.info(f"Stream stopped: {stream_sid}")
                     # ── Instant UI update: delete active call NOW ──
                     # save_call_record runs async later — UI clears immediately
+                    call_active = False  # prevent further upserts
                     if call_sid and business_id:
                         asyncio.create_task(delete_active_call(call_sid))
                     break
@@ -1352,27 +1370,31 @@ async def media_stream(websocket: WebSocket):
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Aria: {text}")
+                        _now = datetime.now(timezone.utc).isoformat()
+                        transcript_turns.append({"role":"ai","text":text,"ts":_now})
+                        if len(transcript_turns) > 40: transcript_turns.pop(0)
                         # Push live transcript after every Aria turn for Glass Box
                         if business_id:
-                            turns = [{"role": "ai" if t.startswith("Aria:") else "user",
-                                      "text": t.split(": ", 1)[-1], "ts": datetime.now(timezone.utc).isoformat()}
-                                     for t in transcript[-20:]]
-                            asyncio.create_task(upsert_active_call(
-                                business_id, call_sid, from_number, "in-progress", turns
-                            ))
+                            turns = transcript_turns[-20:]
+                            if call_active:
+                                asyncio.create_task(upsert_active_call(
+                                    business_id, call_sid, from_number, "in-progress", turns
+                                ))
 
                 elif event_type == "conversation.item.input_audio_transcription.completed":
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Caller: {text}")
+                        _now2 = datetime.now(timezone.utc).isoformat()
+                        transcript_turns.append({"role":"user","text":text,"ts":_now2})
+                        if len(transcript_turns) > 40: transcript_turns.pop(0)
                         # Push caller speech immediately so Glass Box shows it live
                         if business_id:
-                            _turns = [{"role": "ai" if t.startswith("Aria:") else "user",
-                                       "text": t.split(": ", 1)[-1], "ts": datetime.now(timezone.utc).isoformat()}
-                                      for t in transcript[-20:]]
-                            asyncio.create_task(upsert_active_call(
-                                business_id, call_sid, from_number, "in-progress", _turns
-                            ))
+                            _turns = transcript_turns[-20:]
+                            if call_active:
+                                    asyncio.create_task(upsert_active_call(
+                                        business_id, call_sid, from_number, "in-progress", _turns
+                                    ))
                         last_speech_at = datetime.now(timezone.utc)
 
                 elif event_type == "response.function_call_arguments.done":
