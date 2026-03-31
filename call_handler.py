@@ -35,7 +35,7 @@ except ImportError:
 import httpx
 import websockets
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -540,8 +540,11 @@ async def extract_lead_from_transcript(
         contact_row = {
             "business_id":  business_id,
             "phone":        phone_clean,
-            "lead_status":  "new",
-            "source":       "call",
+            "lead_status":        "new",
+            "pipeline_status":    "NEW_LEAD",   # 6-stage pipeline
+            "channel":            "ARIA_PHONE",
+            "source":             "call",
+            "last_interaction_at": datetime.now(timezone.utc).isoformat(),
             "last_summary": transcript[:500],
             "ai_notes":     (encrypt_text if should_encrypt() else lambda x: x)(_json.dumps({
                 "interest":    extracted.get("interest"),
@@ -710,6 +713,12 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
             # Get emergency transfer number for this business
             biz = sb.from_("businesses").select("emergency_transfer_number,name").eq("id", business_id).single().execute()
             transfer_number = biz.data.get("emergency_transfer_number") if biz.data else None
+
+            # Also check settings_business.transfer_number (set in CRM Settings > Warm Handoff)
+            if not transfer_number:
+                st = sb.from_("settings_business").select("transfer_number").eq("business_id", business_id).maybeSingle().execute()
+                if st.data and st.data.get("transfer_number"):
+                    transfer_number = st.data["transfer_number"]
             biz_name = biz.data.get("name", "the team") if biz.data else "the team"
 
             if not transfer_number:
@@ -729,7 +738,7 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                     # Hijack the live call via Twilio REST API
                     async with httpx.AsyncClient() as client:
                         resp = await client.post(
-                            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{to_number}.json",
+                            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{call_sid}.json",
                             auth=(TWILIO_SID, TWILIO_TOKEN),
                             data={"Twiml": twiml},
                             timeout=8.0,
@@ -872,25 +881,14 @@ async def silence_monitor(openai_ws, get_last_speech, get_is_responding, websock
             return
 
 async def start_twilio_recording(call_sid: str):
-    """Start call recording via Twilio REST API — compatible with Media Streams."""
-    try:
-        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
-        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
-        if not TWILIO_SID or not TWILIO_TOKEN:
-            return
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{call_sid}/Recordings.json",
-                auth=(TWILIO_SID, TWILIO_TOKEN),
-                data={
-                    "RecordingStatusCallback": f"{os.environ.get('CALL_HANDLER_URL', '')}/twilio-status",
-                    "RecordingStatusCallbackMethod": "POST",
-                },
-                timeout=10.0,
-            )
-        logger.info(f"Recording started for {call_sid}: {resp.status_code}")
-    except Exception as e:
-        logger.warning(f"Recording start failed (non-critical): {e}")
+    """DISABLED per Zero Audio Retention Policy — Receptionist.co does not record audio.
+    Raw audio streams are processed ephemerally in memory and discarded on disconnect.
+    See: receptionist.co/security#zero-audio-retention
+    """
+    # ZAR POLICY: This function is intentionally disabled.
+    logger.warning("start_twilio_recording called — BLOCKED by Zero Audio Retention Policy")
+    return  # never proceeds
+
 
 async def delete_active_call(call_sid: str):
     """Delete active call row on hang-up — keeps the table lean and triggers DELETE Realtime event."""
@@ -1085,7 +1083,7 @@ async def media_stream(websocket: WebSocket):
                     _active_stream_sid[call_sid] = stream_sid
 
                     # Start recording via Twilio REST API (compatible with Media Streams)
-                    asyncio.create_task(start_twilio_recording(call_sid))
+                    # ZAR Policy: recording disabled
 
                     # Load business config + memories
                     business_cfg = await get_business_config(to_number)
@@ -1207,6 +1205,33 @@ async def media_stream(websocket: WebSocket):
                             "caller's name, phone number, and preferred appointment time to finalize the "
                             "booking. Be friendly, efficient, and conversational.\n"
                         )
+
+                    # ── After-Hours Detection ─────────────────────────────────────
+                    # Per Zero Audio Retention Policy: no voicemail — Aria takes message
+                    # and creates a NEW_LEAD CRM record flagged for morning follow-up
+                    try:
+                        from zoneinfo import ZoneInfo
+                        biz_tz  = ZoneInfo(tz)
+                        now_biz = datetime.now(biz_tz)
+                        hour    = now_biz.hour
+                        weekday = now_biz.weekday()  # 0=Mon 6=Sun
+                        # Default after-hours: outside 8am-6pm Mon-Fri
+                        is_after_hours = (hour < 8 or hour >= 18) or weekday >= 5
+                        if is_after_hours:
+                            compliance_rule += (
+                                "\n\nAFTER HOURS POLICY (CRITICAL):\n"
+                                f"It is currently {now_biz.strftime('%I:%M %p %Z')} — outside business hours. "
+                                "DO NOT attempt to book an appointment right now. Instead:\n"
+                                "1. Greet warmly: 'Hi, you've reached [business]. We're currently closed, "
+                                "but I'm their AI assistant and I'm here to help!'\n"
+                                "2. Ask what you can help with or what message to pass to staff in the morning.\n"
+                                "3. Collect: caller name, phone number, and their message/request.\n"
+                                "4. Confirm: 'Perfect — a team member will reach out to you first thing in the morning!'\n"
+                                "IMPORTANT: This replaces traditional voicemail. No audio is stored — "
+                                "only this transcript becomes the CRM record (NEW_LEAD status).\n"
+                            )
+                    except Exception as tz_err:
+                        logger.debug(f"After-hours check: {tz_err}")
 
                                         # Detect if this is Receptionist.co's own demo line
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
@@ -1582,10 +1607,12 @@ async def twilio_status(request: Request):
             if not sb:
                 return
             try:
-                # Twilio appends .json — strip and use .mp3 for direct playback
-                clean_url = recording_url.replace(".json", "") + ".mp3"
-                sb.from_("calls").update({
-                    "recording_url": clean_url
+                # ZAR Policy: recording_url intentionally not stored — Zero Audio Retention
+                # clean_url = recording_url  # disabled
+                logger.info(f"ZAR: recording URL discarded per Zero Audio Retention Policy")
+                if False:
+                    sb.from_("calls").update({
+                    "recording_url": recording_url  # disabled
                 }).eq("twilio_call_sid", call_sid).execute()
                 logger.info(f"Recording saved for {call_sid}")
             except Exception as e:
@@ -2186,6 +2213,25 @@ async def warm_handoff(req: Request):
                 "instructions": prompt,
             }
         }))
+        # Policy: mark exact handoff time in transcript for delineation
+        ts_now = datetime.now(timezone.utc).isoformat()
+        ws_registry = _active_twilio_ws.get(call_sid)
+        if ws_registry:
+            try:
+                # Push a system marker turn to active_calls live_transcript
+                sb = get_sb()
+                if sb:
+                    result = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybeSingle().execute()
+                    if result.data:
+                        current_turns = result.data.get("live_transcript") or []
+                        current_turns.append({
+                            "role": "system",
+                            "text": f"[Warm Handoff initiated at {datetime.now(timezone.utc).strftime('%I:%M %p UTC')}. AI transcription will cease when human answers. Per Zero Audio Retention Policy, human conversation is not recorded.]",
+                            "ts": ts_now
+                        })
+                        sb.from_("active_calls").update({"live_transcript": current_turns}).eq("call_sid", call_sid).execute()
+            except Exception as marker_err:
+                logger.debug(f"Handoff marker: {marker_err}")
         logger.info(f"Warm handoff injected for {call_sid} (script {script})")
         return JSONResponse({"ok": True, "message": "Prompt injected — Aria is asking the caller"})
     except Exception as e:
