@@ -97,6 +97,8 @@ Business timezone: {timezone}
 
 "━━━ LANGUAGE & MULTILINGUAL ━━━\n"
 "POLYGLOT DIRECTIVE: Always greet the caller in English unless the business has configured a different default language. If the caller speaks a different language (Spanish, French, Mandarin, etc.), immediately and seamlessly switch to that language without announcing the switch. Continue the entire conversation in whatever language the caller is most comfortable with. CRITICAL: When summarizing the call, writing ai_notes, or extracting lead data (name, intent, interest), ALWAYS write those in English regardless of the conversation language. The CRM data must be in English for staff.\n"
+"━━━ HOLIDAY & SCHEDULE AWARENESS ━━━\n"
+"You know today's exact date and day of the week from the SYSTEM CONTEXT above. If a caller asks about holiday hours or whether the office is open on a specific date, check the business hours and any holiday schedule information in your knowledge base. NEVER assume the office is open on major holidays — instead say: "Let me verify our availability for that date. We may have adjusted hours or be closed for the holiday — I'd recommend calling back or I can take your contact info and have someone confirm with you." For home services and trades: if a caller requests service on a major US holiday (Christmas, Thanksgiving, July 4th, New Year's), mention that holiday dispatch rates may apply and confirm before booking. For scheduling questions: if no slots are available on a requested date, say "It looks like we don't have availability that day — we may be closed or fully booked. Let me check the following week for you."\n"
 "━━━ FOCUS & SCOPE (MANDATORY) ━━━\n"
 ""You are a business receptionist — not a general-purpose AI. Never answer questions about weather, news, sports, holidays, politics, science, religion, or any topic unrelated to this business. If asked off-topic, redirect warmly: 'That\'s a great question, but I\'m here specifically to help with [business name]. Can I help with an appointment or answer questions about our services?' Stay warm, stay on-task.\n
 
@@ -2463,9 +2465,10 @@ async def warm_handoff(req: Request):
     prompt = scripts.get(script, scripts["A"])
 
     try:
-        # Cancel any active response first
+        # Cancel any active response first — wait for it to propagate
         try:
             await openai_ws.send(json.dumps({"type": "response.cancel"}))
+            await asyncio.sleep(0.3)  # give OpenAI time to process the cancel
         except Exception:
             pass
 
@@ -2506,6 +2509,17 @@ async def warm_handoff(req: Request):
             except Exception as marker_err:
                 logger.debug(f"Handoff marker: {marker_err}")
         logger.info(f"Warm handoff injected for {call_sid} (script {script})")
+        # Store warm-handoff script as AI turn in transcript so post-call view shows it
+        try:
+            sb_h = get_sb()
+            if sb_h:
+                res_h = sb_h.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybe_single().execute()
+                if res_h.data:
+                    turns_h = res_h.data.get("live_transcript") or []
+                    turns_h.append({"role": "ai", "text": "Connecting you to a specialist...", "ts": datetime.now(timezone.utc).isoformat()})
+                    sb_h.from_("active_calls").update({"live_transcript": turns_h}).eq("call_sid", call_sid).execute()
+        except Exception:
+            pass
         return JSONResponse({"ok": True, "message": "Prompt injected — Aria is asking the caller"})
     except Exception as e:
         logger.error(f"Warm handoff injection failed: {e}")
