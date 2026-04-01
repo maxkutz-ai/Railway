@@ -95,8 +95,8 @@ Current date and time: {datetime}
 Business timezone: {timezone}
 {custom_instructions}
 
-"━━━ LANGUAGE POLICY ━━━\n"
-"ENGLISH ONLY: You always respond in English regardless of what language the caller uses. If someone speaks Spanish, French, or any other language, respond: I am sorry, I can only assist in English. Can I help you in English? Never switch to another language under any circumstance.\n"
+"━━━ LANGUAGE & MULTILINGUAL ━━━\n"
+"POLYGLOT DIRECTIVE: Always greet the caller in English unless the business has configured a different default language. If the caller speaks a different language (Spanish, French, Mandarin, etc.), immediately and seamlessly switch to that language without announcing the switch. Continue the entire conversation in whatever language the caller is most comfortable with. CRITICAL: When summarizing the call, writing ai_notes, or extracting lead data (name, intent, interest), ALWAYS write those in English regardless of the conversation language. The CRM data must be in English for staff.\n"
 "━━━ FOCUS & SCOPE (MANDATORY) ━━━\n"
 ""You are a business receptionist — not a general-purpose AI. Never answer questions about weather, news, sports, holidays, politics, science, religion, or any topic unrelated to this business. If asked off-topic, redirect warmly: 'That\'s a great question, but I\'m here specifically to help with [business name]. Can I help with an appointment or answer questions about our services?' Stay warm, stay on-task.\n
 
@@ -933,6 +933,105 @@ async def upsert_active_call(business_id: str, call_sid: str, from_number: str, 
     except Exception as e:
         logger.warning(f"active_calls upsert failed (non-critical): {e}")
 
+async def run_aup_moderation(
+    business_id: str,
+    call_sid: str,
+    transcript: str,
+    business_name: str = "",
+) -> None:
+    """
+    Asynchronously scans the call transcript against OpenAI's free Moderation API.
+    Zero-retention endpoint — OpenAI does not train on moderation data.
+    If flagged, inserts an encrypted alert into aup_compliance_alerts (super-admin only).
+    """
+    if not transcript or not business_id:
+        return
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if not openai_key:
+        return
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/moderations",
+                headers={"Authorization": f"Bearer {openai_key}",
+                         "Content-Type": "application/json"},
+                json={"input": transcript[:8000]},   # free endpoint, fast
+                timeout=10.0,
+            )
+        if resp.status_code != 200:
+            return
+
+        data      = resp.json()
+        result    = data.get("results", [{}])[0]
+        flagged   = result.get("flagged", False)
+
+        if not flagged:
+            return  # clean call — nothing to do
+
+        # Map OpenAI categories → our AUP violation types
+        cats = result.get("categories", {})
+        scores = result.get("category_scores", {})
+
+        CATEGORY_MAP = {
+            "hate":               "HATE_SPEECH",
+            "hate/threatening":   "THREAT_VIOLENCE",
+            "harassment":         "HARASSMENT",
+            "harassment/threatening": "THREAT_VIOLENCE",
+            "self-harm":          "SELF_HARM",
+            "self-harm/intent":   "SELF_HARM",
+            "self-harm/instructions": "SELF_HARM",
+        }
+
+        # Pick the highest-scoring flagged category
+        top_cat   = max(scores, key=scores.get) if scores else "harassment"
+        vtype     = CATEGORY_MAP.get(top_cat, "SPAM_PHISHING")
+        severity  = round(scores.get(top_cat, 0.9), 3)
+
+        # Encrypt the flagged text (same AES-256 as transcripts)
+        snippet   = transcript[:500]
+        encrypted = encrypt_text(snippet) if should_encrypt() else snippet
+
+        sb = get_sb()
+        if not sb:
+            return
+
+        sb.table("aup_compliance_alerts").insert({
+            "business_id":   business_id,
+            "call_sid":      call_sid,
+            "violation_type": vtype,
+            "severity_score": severity,
+            "flagged_text":   encrypted,
+            "raw_categories": cats,
+            "status":         "PENDING_REVIEW",
+        }).execute()
+
+        logger.warning(
+            f"🚨 AUP VIOLATION: {vtype} (score={severity:.3f}) "
+            f"— Tenant: {business_name or business_id} | Call: {call_sid}"
+        )
+
+        # Optional: notify internal Slack/Discord webhook
+        alert_webhook = os.environ.get("AUP_ALERT_WEBHOOK_URL", "")
+        if alert_webhook:
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(alert_webhook, json={
+                        "text": (
+                            f"🚨 *AUP Alert* — `{vtype}` (confidence: {severity:.0%})\n"
+                            f"*Tenant:* {business_name or business_id}\n"
+                            f"*Call:* `{call_sid}`\n"
+                            f"Review in the Compliance Dashboard."
+                        )
+                    }, timeout=5.0)
+            except Exception:
+                pass  # non-critical
+
+    except Exception as e:
+        logger.debug(f"AUP moderation error (non-critical): {e}")
+
+
 async def save_call_record(call_sid: str, business_id: str, from_number: str,
                             transcript: str, duration: int, start_time_iso: str = None):
     """Save completed call to Supabase."""
@@ -1656,6 +1755,11 @@ async def media_stream(websocket: WebSocket):
             try:
                 await save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
                 logger.info(f"Call saved: {call_sid}")
+                # Async AUP moderation — non-blocking, runs after save
+                asyncio.create_task(run_aup_moderation(
+                    business_id, call_sid, clean_transcript,
+                    business_name=(business_cfg or {}).get("name", "") if hasattr(business_cfg, "get") else "",
+                ))
                 # ── Tier 2: Fire Zapier/webhook if configured ────────────────────
                 try:
                     sb_wh = get_sb()
