@@ -419,7 +419,7 @@ async def get_business_config(to_number: str) -> dict:
             "aria_personality,business_hours,services_offered,timezone,"
             "max_call_duration_minutes,address,phone,website_url,brand_name,transfer_number,"
             "announce_recording,recording_consent_text,consent_greeting_style,external_intake_url,zapier_webhook_url,"
-            "emergency_contact_email,emergency_contact_phone,supported_service_areas,industry_vertical"
+            "emergency_contact_email,emergency_contact_phone,supported_service_areas,industry_vertical,greeting_warm_open,greeting_handoff"
         ).eq("business_id", biz_id).single().execute()
         result["settings_business"] = r.data or {}
     except:
@@ -1279,11 +1279,12 @@ async def media_stream(websocket: WebSocket):
                             disclosure = f"Quick heads-up — {consent_text.lower()}"
 
                         compliance_rule = (
-                            f"MANDATORY LEGAL DISCLOSURE — SAY THIS AS PART OF YOUR OPENING GREETING:\n"
-                            f"Weave this naturally into your first sentence: \"{disclosure}\"\n"
-                            f"This is required for TCPA and two-party consent state compliance.\n"
-                            f"The caller's continued presence on the line constitutes implied consent.\n"
-                            f"Do NOT repeat this disclosure during the call — once at the very start is sufficient."
+                            f"LEGAL COMPLIANCE CONFIRMED: The opening greeting already contains the required\n"
+                            f"recording and monitoring disclosure: \"{disclosure}\"\n"
+                            f"This disclosure is embedded in Part 1 of your opening — DO NOT repeat it mid-call.\n"
+                            f"The caller's continued presence on the line constitutes implied consent (TCPA/CIPA).\n"
+                            f"If a caller asks if the call is recorded, confirm it is: 'Yes, this call is recorded.'\n"
+                            f"Never deny or downplay the recording disclosure."
                         )
                     else:
                         compliance_rule = (
@@ -1416,16 +1417,36 @@ async def media_stream(websocket: WebSocket):
 
                                         # Detect if this is Receptionist.co's own demo line
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
-                    # Demo greeting (always discloses it's a demo + recorded)
-                    opening = (
-                        f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co — this call is being recorded and monitored. "
-                        "You're experiencing a live demo right now! How can I help you today?"
-                    ) if is_demo else (
-                        # Live greeting: embed disclosure naturally based on style
-                        f"Hi, thank you for calling {biz_name}! "
-                        + (f"{disclosure} " if announce_recording else "")
-                        + f"I'm {aria_name}, the AI assistant. How can I help you today?"
-                    )
+                    # ── Three-part greeting composition ─────────────────────────────────────────
+                    # Part 1: Warm open — clinic-branded, editable by owner
+                    warm_open = (
+                        settings.get("greeting_warm_open") or
+                        f"Hi, thank you for calling {biz_name}!"
+                    ).strip()
+
+                    # Part 2: Disclosure — SYSTEM-MANAGED, NOT EDITABLE BY CLINIC
+                    # Always present. Legal protection for two-party consent states.
+                    legal_middle = (f"{disclosure}" if announce_recording else "") 
+
+                    # Part 3: Handoff — editable, sets the AI role
+                    handoff = (
+                        settings.get("greeting_handoff") or
+                        f"I'm {aria_name}, the AI assistant. How can I help you today?"
+                    ).strip()
+
+                    # Compose: [warm_open] [legal_middle] [handoff]
+                    if is_demo:
+                        opening = (
+                            f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co — "
+                            "this call is being recorded and monitored. "
+                            "You're experiencing a live demo right now! How can I help you today?"
+                        )
+                    else:
+                        parts = [warm_open]
+                        if legal_middle:
+                            parts.append(legal_middle)
+                        parts.append(handoff)
+                        opening = " ".join(parts)
 
                     caller_last4 = from_number[-4:] if len(from_number) >= 4 else from_number
                     caller_fmt   = from_number.replace("+1", "").strip()
