@@ -1062,34 +1062,18 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             "transcript_summary": stored_transcript,
         }, on_conflict="twilio_call_sid").execute()
 
-        # Fetch call_id for AUP analysis
+        # Post-call async tasks
         try:
-            call_row = sb.from_("calls").select("id").eq("twilio_call_sid", call_sid).maybe_single().execute()
-            if call_row.data:
-                asyncio.create_task(trigger_aup_analysis(call_row.data["id"], business_id, clean_transcript))
             asyncio.create_task(notify_lead_captured(business_id, clean_transcript, from_number))
             asyncio.create_task(extract_lead_from_transcript(business_id, call_sid, from_number, clean_transcript))
         except:
             pass
 
+
+
     except Exception as e:
         logger.error(f"save_call_record error: {e}")
 
-async def trigger_aup_analysis(call_id: str, business_id: str, transcript: str):
-    """Post-call AUP semantic analysis — fire and forget."""
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{APP_URL}/api/aup/analyze",
-                json={"call_id": call_id, "business_id": business_id, "transcript": transcript},
-                timeout=15.0,
-            )
-    except Exception as e:
-        logger.warning(f"AUP trigger failed (non-critical): {e}")
-
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@app.get("/health")
 async def health():
     """
     Health check endpoint — monitored by UptimeRobot every 1 minute.
@@ -1757,7 +1741,7 @@ async def media_stream(websocket: WebSocket):
                 logger.info(f"Call saved: {call_sid}")
                 # Async AUP moderation — non-blocking, runs after save
                 asyncio.create_task(run_aup_moderation(
-                    business_id, call_sid, clean_transcript,
+                    business_id, call_sid, full_transcript,  # full_transcript is in scope here
                     business_name=(business_cfg or {}).get("name", "") if hasattr(business_cfg, "get") else "",
                 ))
                 # ── Tier 2: Fire Zapier/webhook if configured ────────────────────
