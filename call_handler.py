@@ -21,13 +21,14 @@ import base64
 import re
 from datetime import datetime, timezone, timedelta, date
 try:
-    from encryption import decrypt_api_key, encrypt_text, decrypt_text, should_encrypt
+    from encryption import decrypt_api_key, encrypt_text, decrypt_text, should_encrypt, encrypt_pii, decrypt_pii, hash_pii
 except ImportError:
-    # Graceful fallback if encryption module not deployed
-    def decrypt_api_key(x): return x
-    def encrypt_text(x): return x
-    def decrypt_text(x): return x
-    def should_encrypt(): return False
+    # encryption.py is REQUIRED — if import fails, fail loud
+    raise RuntimeError(
+        "FATAL: encryption.py could not be imported. "
+        "Receptionist.co cannot start without the encryption module. "
+        "Ensure encryption.py is present in the Railway deployment."
+    )
 try:
     from zoneinfo import ZoneInfo          # Python 3.9+
 except ImportError:
@@ -541,7 +542,8 @@ async def extract_lead_from_transcript(
 
         contact_row = {
             "business_id":  business_id,
-            "phone":        phone_clean,
+            "phone":        encrypt_pii(phone_clean),   # AES-256 at-rest PII encryption
+            "phone_hash":   hash_pii(phone_clean),      # deterministic lookup key
             "lead_status":        "new",
             "pipeline_status":    "NEW_LEAD",   # 6-stage pipeline
             "channel":            "ARIA_PHONE",
@@ -569,7 +571,7 @@ async def extract_lead_from_transcript(
         # If new caller → create the record
         upsert_result = sb.from_("contacts").upsert(
             contact_row,
-            on_conflict="business_id,phone",
+            on_conflict="business_id,phone_hash",
         ).select("id").execute()
 
         logger.info(f"Contact upserted: {phone_clean} for {business_id}")
@@ -940,7 +942,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
         sb.from_("calls").upsert({
             "twilio_call_sid":  call_sid,
             "business_id":      business_id,
-            "phone_number":     from_number,
+            "phone_number":     encrypt_pii(from_number),
             "from_number":      from_number,
             "direction":        "inbound",
             "duration_seconds": duration,
