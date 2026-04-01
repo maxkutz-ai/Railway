@@ -418,7 +418,7 @@ async def get_business_config(to_number: str) -> dict:
         r = sb.from_("settings_business").select(
             "aria_personality,business_hours,services_offered,timezone,"
             "max_call_duration_minutes,address,phone,website_url,brand_name,transfer_number,"
-            "announce_recording,recording_consent_text,external_intake_url,zapier_webhook_url,"
+            "announce_recording,recording_consent_text,consent_greeting_style,external_intake_url,zapier_webhook_url,"
             "emergency_contact_email,emergency_contact_phone,supported_service_areas,industry_vertical"
         ).eq("business_id", biz_id).single().execute()
         result["settings_business"] = r.data or {}
@@ -1260,17 +1260,30 @@ async def media_stream(websocket: WebSocket):
                     address = settings.get("address") or ""
 
                     # ── Compliance: recording announcement ────────────────────
-                    announce_recording = settings.get("announce_recording", True)  # default ON
+                    announce_recording = settings.get("announce_recording", True)  # default ON — TCPA/CIPA safe harbor
                     consent_text = (
                         settings.get("recording_consent_text") or
-                        "This call is being recorded and processed by AI."
+                        f"This call may be recorded and monitored for quality and training purposes."
                     )
+                    # Industry (medical vs trades vs general) — shapes greeting style
+                    industry = (settings.get("industry_vertical") or "GENERAL_BUSINESS").upper()
 
                     if announce_recording:
+                        # Three consent script styles — operator chooses in CRM Settings
+                        consent_style = settings.get("consent_greeting_style", "conversational")
+                        if consent_style == "formal" or "MEDICAL" in industry:
+                            disclosure = f"Please note: {consent_text}"
+                        elif consent_style == "transparent":
+                            disclosure = f"Just so you know — {consent_text.lower()} My human team also monitors these calls to make sure you get the best service."
+                        else:  # conversational (default)
+                            disclosure = f"Quick heads-up — {consent_text.lower()}"
+
                         compliance_rule = (
-                            f"MANDATORY: Begin every call by saying exactly:\n"
-                            f"\"{consent_text}\"\n"
-                            f"Say this BEFORE anything else, even before your greeting."
+                            f"MANDATORY LEGAL DISCLOSURE — SAY THIS AS PART OF YOUR OPENING GREETING:\n"
+                            f"Weave this naturally into your first sentence: \"{disclosure}\"\n"
+                            f"This is required for TCPA and two-party consent state compliance.\n"
+                            f"The caller's continued presence on the line constitutes implied consent.\n"
+                            f"Do NOT repeat this disclosure during the call — once at the very start is sufficient."
                         )
                     else:
                         compliance_rule = (
@@ -1403,11 +1416,15 @@ async def media_stream(websocket: WebSocket):
 
                                         # Detect if this is Receptionist.co's own demo line
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
+                    # Demo greeting (always discloses it's a demo + recorded)
                     opening = (
-                        f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co, on a recorded line. "
-                        "You are actually experiencing a live demo of our software right now! How can I help you today?"
+                        f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co — this call is being recorded and monitored. "
+                        "You're experiencing a live demo right now! How can I help you today?"
                     ) if is_demo else (
-                        f"Hi! Thank you for calling {biz_name}. I'm {aria_name}, an AI assistant on a recorded line. How can I help you today?"
+                        # Live greeting: embed disclosure naturally based on style
+                        f"Hi, thank you for calling {biz_name}! "
+                        + (f"{disclosure} " if announce_recording else "")
+                        + f"I'm {aria_name}, the AI assistant. How can I help you today?"
                     )
 
                     caller_last4 = from_number[-4:] if len(from_number) >= 4 else from_number
