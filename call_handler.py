@@ -1563,15 +1563,16 @@ async def media_stream(websocket: WebSocket):
                     except Exception:
                         pass  # Twilio disconnected
 
-
-                    is_responding = False  # response finished
+                elif event_type == "response.audio_transcript.done":
+                    # Aria finished speaking — store her full transcript turn
+                    is_responding = False
                     text = data.get("transcript", "")
                     if text:
                         transcript.append(f"Aria: {text}")
                         _now = datetime.now(timezone.utc).isoformat()
                         transcript_turns.append({"role":"ai","text":text,"ts":_now})
                         if len(transcript_turns) > 40: transcript_turns.pop(0)
-                        # Push live transcript after every Aria turn for Glass Box
+                        # Push live transcript so Glass Box shows Aria's turns
                         if business_id:
                             turns = transcript_turns[-20:]
                             if call_active:
