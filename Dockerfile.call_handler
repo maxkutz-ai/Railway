@@ -11,9 +11,11 @@ RUN pip install --no-cache-dir \
     supabase==2.10.0 \
     python-multipart==0.0.12 \
     python-dotenv==1.0.0 \
-    twilio==9.3.0
+    twilio==9.3.0 \
+    cryptography==42.0.8
 
 COPY call_handler.py .
+COPY encryption.py .
 COPY railway_security.py .
 
 EXPOSE 8080
