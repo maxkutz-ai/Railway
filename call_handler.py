@@ -2591,28 +2591,50 @@ async def transfer_call(req: Request):
     if not call_sid:
         return JSONResponse({"ok": False, "error": "call_sid required"}, status_code=400)
 
-    # Browser mode: redirect call to browser Client instead of a phone number
+    # Browser mode: stop Aria FIRST, then redirect call to browser Client
     if mode == "browser" and identity:
         try:
-            client = Client(
-                os.environ.get("TWILIO_ACCOUNT_SID",""),
-                os.environ.get("TWILIO_AUTH_TOKEN","")
+            # Step 1: Close the OpenAI WebSocket so Aria stops speaking
+            # This must happen BEFORE Twilio redirects the call, otherwise
+            # the staff member hears Aria instead of the caller.
+            openai_ws = _active_openai_ws.get(call_sid)
+            if openai_ws:
+                try:
+                    await openai_ws.close()
+                    logger.info(f"OpenAI stream closed for browser takeover: {call_sid}")
+                except Exception:
+                    pass  # Already closed is fine
+
+            # Step 2: Small buffer so Twilio drains Aria's last audio chunk
+            await asyncio.sleep(0.5)
+
+            # Step 3: Redirect the Twilio call leg to the browser Client
+            # Using inline TwiML — <Dial><Client>identity</Client></Dial>
+            # This connects the caller directly to the staff member's browser.
+            TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+            TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+            RAILWAY_URL  = os.environ.get("RAILWAY_PUBLIC_DOMAIN",
+                           "https://aria-call-handler-production.up.railway.app")
+            twiml = (
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<Response>'
+                f'<Dial timeout="60" callerId="+18889732377">'
+                f'<Client>{identity}</Client>'
+                '</Dial>'
+                '</Response>'
             )
-            # Redirect the Twilio call to our browser-answer TwiML
-            APP_BASE = os.environ.get("CRM_BASE_URL", "https://app.receptionist.co")
-            RAILWAY_URL = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "https://aria-call-handler-production.up.railway.app")
-            twiml_url = f"{RAILWAY_URL}/twiml/browser-answer"
-            client.calls(call_sid).update(
-                url=twiml_url,
-                method="POST",
-                status_callback=f"{RAILWAY_URL}/twilio-status",
-            )
-            # POST the identity to the TwiML endpoint via status_callback_event isn't right
-            # Instead, build the TwiML inline and update
-            twiml = f"""<?xml version="1.0" encoding="UTF-8"?><Response><Dial timeout="30"><Client>{identity}</Client></Dial></Response>"""
-            client.calls(call_sid).update(twiml=twiml)
-            logger.info(f"Call {call_sid} redirected to browser client {identity}")
-            return JSONResponse({"ok": True, "message": f"Call transferred to browser client {identity}"})
+            async with httpx.AsyncClient() as hclient:
+                resp = await hclient.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Calls/{call_sid}.json",
+                    auth=(TWILIO_SID, TWILIO_TOKEN),
+                    data={"Twiml": twiml},
+                    timeout=8.0,
+                )
+            if resp.is_success:
+                logger.info(f"Call {call_sid} handed to browser client {identity} — Aria disconnected")
+                return JSONResponse({"ok": True, "message": f"Call transferred to your browser. Aria has disconnected."})
+            else:
+                raise Exception(f"Twilio update failed: {resp.status_code} {resp.text[:200]}")
         except Exception as e:
             logger.error(f"Browser transfer failed: {e}")
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
