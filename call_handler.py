@@ -426,7 +426,7 @@ async def get_business_config(to_number: str) -> dict:
 
     # ── ai_receptionist_config ────────────────────────────────────────────────
     try:
-        r = sb.from_("ai_receptionist_config").select("name,greeting,escalation_phone").eq("business_id", biz_id).maybeSingle().execute()
+        r = sb.from_("ai_receptionist_config").select("name,greeting,escalation_phone").eq("business_id", biz_id).maybe_single().execute()
         result["ai_config"] = r.data or {}
     except:
         result["ai_config"] = {}
@@ -699,7 +699,7 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
 
 
 
-async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to_number: str) -> str:
+async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to_number: str, call_sid: str = "") -> str:
     """
     Dispatch OpenAI function calls to Cal.com API via the CRM /api/cal routes.
     Returns a plain text string that Aria will speak to the caller.
@@ -718,14 +718,14 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
 
             # Also check settings_business.transfer_number (set in CRM Settings > Warm Handoff)
             if not transfer_number:
-                st = sb.from_("settings_business").select("transfer_number").eq("business_id", business_id).maybeSingle().execute()
+                st = sb.from_("settings_business").select("transfer_number").eq("business_id", business_id).maybe_single().execute()
                 if st.data and st.data.get("transfer_number"):
                     transfer_number = st.data["transfer_number"]
             biz_name = biz.data.get("name", "the team") if biz.data else "the team"
 
             if not transfer_number:
                 # Check ai_receptionist_config for escalation_phone
-                cfg = sb.from_("ai_receptionist_config").select("escalation_phone").eq("business_id", business_id).maybeSingle().execute()
+                cfg = sb.from_("ai_receptionist_config").select("escalation_phone").eq("business_id", business_id).maybe_single().execute()
                 transfer_number = cfg.data.get("escalation_phone") if cfg.data else None
 
             if transfer_number:
@@ -953,7 +953,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
 
         # Fetch call_id for AUP analysis
         try:
-            call_row = sb.from_("calls").select("id").eq("twilio_call_sid", call_sid).maybeSingle().execute()
+            call_row = sb.from_("calls").select("id").eq("twilio_call_sid", call_sid).maybe_single().execute()
             if call_row.data:
                 asyncio.create_task(trigger_aup_analysis(call_row.data["id"], business_id, clean_transcript))
             asyncio.create_task(notify_lead_captured(business_id, clean_transcript, from_number))
@@ -1086,6 +1086,19 @@ async def media_stream(websocket: WebSocket):
 
                     # Start recording via Twilio REST API (compatible with Media Streams)
                     # ZAR Policy: recording disabled
+
+                    # ── Twilio safety timeout (hard stop even if Railway hangs) ──────
+                    try:
+                        _ts = os.environ.get("TWILIO_ACCOUNT_SID",""); _tt = os.environ.get("TWILIO_AUTH_TOKEN","")
+                        if _ts and _tt and call_sid:
+                            _limit = (max_call_mins + 2) * 60
+                            async with httpx.AsyncClient() as _tc:
+                                await _tc.post(
+                                    f"https://api.twilio.com/2010-04-01/Accounts/{_ts}/Calls/{call_sid}.json",
+                                    auth=(_ts, _tt), data={"TimeLimit": str(_limit)}, timeout=4.0,
+                                )
+                            logger.debug(f"Twilio TimeLimit={_limit}s for {call_sid}")
+                    except Exception as _tl: logger.debug(f"TimeLimit: {_tl}")
 
                     # Load business config + memories
                     business_cfg = await get_business_config(to_number)
@@ -1490,7 +1503,7 @@ async def media_stream(websocket: WebSocket):
                     except Exception:
                         fn_args = {}
                     logger.info(f"Function call: {fn_name}({fn_args})")
-                    result_text = await handle_function_call(fn_name, fn_args, business_id, to_number)
+                    result_text = await handle_function_call(fn_name, fn_args, business_id, to_number, call_sid=call_sid)
                     # Feed result back to OpenAI so Aria can speak it
                     await openai_ws.send(_json.dumps({
                         "type": "conversation.item.create",
@@ -1542,7 +1555,13 @@ async def media_stream(websocket: WebSocket):
         async def call_timer():
             soft_secs = (max_call_mins - 1) * 60
             hard_secs = max_call_mins * 60 + 30
-            await asyncio.sleep(soft_secs)
+            # Sleep in 10s increments — exits immediately if call_active becomes False
+            for _ in range(max(1, soft_secs // 10)):
+                if not call_active:
+                    return  # call already ended — timer not needed
+                await asyncio.sleep(min(10, soft_secs))
+            if not call_active:
+                return
             logger.info(f"Soft wrap-up at {max_call_mins-1}min")
             try:
                 await openai_ws.send(json.dumps({
@@ -1561,25 +1580,50 @@ async def media_stream(websocket: WebSocket):
                 await openai_ws.send(json.dumps({"type": "response.create"}))
             except:
                 pass
-            await asyncio.sleep(hard_secs - soft_secs)
+            for _ in range(max(1, (hard_secs - soft_secs) // 10)):
+                if not call_active:
+                    return
+                await asyncio.sleep(10)
+            if not call_active:
+                return
             logger.info(f"Hard disconnect at {max_call_mins}min 30s")
             try:
                 await websocket.close()
             except:
                 pass
 
-        await asyncio.gather(
-            receive_from_twilio(),
-            receive_from_openai(),
-            call_timer(),
-            silence_monitor(
+        # ── Task-based execution: cancel timer/monitor when call ends ──────
+        _tasks = [
+            asyncio.ensure_future(receive_from_twilio()),
+            asyncio.ensure_future(receive_from_openai()),
+            asyncio.ensure_future(call_timer()),
+            asyncio.ensure_future(silence_monitor(
                 openai_ws,
                 lambda: last_speech_at,
                 lambda: is_responding,
                 websocket,
                 call_sid,
-            ),
-        )
+            )),
+        ]
+        try:
+            # Wait until the two core WebSocket tasks finish (call ended)
+            done, pending = await asyncio.wait(
+                _tasks[:2],  # receive_from_twilio + receive_from_openai
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Give the second WebSocket task a moment to close cleanly
+            await asyncio.wait(_tasks[:2], return_when=asyncio.ALL_COMPLETED,
+                               timeout=3.0)
+        finally:
+            # Cancel call_timer and silence_monitor — call is over
+            for t in _tasks[2:]:
+                if not t.done():
+                    t.cancel()
+                    try:
+                        await asyncio.wait_for(asyncio.shield(t), timeout=1.0)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+            logger.debug(f"All tasks cleaned up for {call_sid}")
 
     except WebSocketDisconnect:
         logger.info("Twilio WebSocket disconnected")
@@ -1599,7 +1643,7 @@ async def media_stream(websocket: WebSocket):
                 try:
                     sb_wh = get_sb()
                     if sb_wh:
-                        wh_res = sb_wh.from_("settings_business").select("zapier_webhook_url").eq("business_id", business_id).maybeSingle().execute()
+                        wh_res = sb_wh.from_("settings_business").select("zapier_webhook_url").eq("business_id", business_id).maybe_single().execute()
                         zapier_url = (wh_res.data or {}).get("zapier_webhook_url")
                         if zapier_url:
                             payload = {
@@ -1628,7 +1672,7 @@ async def media_stream(websocket: WebSocket):
                         sb_fa = get_sb()
                         biz_fa = sb_fa.from_("businesses").select(
                             "emergency_contact_email,emergency_contact_phone,name"
-                        ).eq("id", business_id).maybeSingle().execute() if sb_fa else None
+                        ).eq("id", business_id).maybe_single().execute() if sb_fa else None
                         ec_phone = (biz_fa.data or {}).get("emergency_contact_phone") if biz_fa else None
                         ec_email = (biz_fa.data or {}).get("emergency_contact_email") if biz_fa else None
                         biz_name = (biz_fa.data or {}).get("name", "your business") if biz_fa else "your business"
@@ -2344,7 +2388,7 @@ async def warm_handoff(req: Request):
                 # Push a system marker turn to active_calls live_transcript
                 sb = get_sb()
                 if sb:
-                    result = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybeSingle().execute()
+                    result = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybe_single().execute()
                     if result.data:
                         current_turns = result.data.get("live_transcript") or []
                         current_turns.append({
@@ -2580,7 +2624,7 @@ async def browser_bridge(req: Request):
         try:
             sb = get_sb()
             if sb:
-                res = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybeSingle().execute()
+                res = sb.from_("active_calls").select("live_transcript").eq("call_sid", call_sid).maybe_single().execute()
                 if res.data:
                     turns = res.data.get("live_transcript") or []
                     turns.append({
@@ -2619,7 +2663,7 @@ async def send_mvd_intake_sms(business_id: str, caller_phone: str, caller_name: 
         # Get the intake URL — external_intake_url takes priority (Tier 1)
         settings = sb.from_("settings_business").select(
             "external_intake_url,phone"
-        ).eq("business_id", business_id).maybeSingle().execute()
+        ).eq("business_id", business_id).maybe_single().execute()
         s = settings.data or {}
 
         external_url = s.get("external_intake_url") or ""
@@ -2665,7 +2709,7 @@ async def send_home_services_confirmation_sms(
         return False
     try:
         sb = get_sb()
-        settings = sb.from_("settings_business").select("phone").eq("business_id", business_id).maybeSingle().execute() if sb else None
+        settings = sb.from_("settings_business").select("phone").eq("business_id", business_id).maybe_single().execute() if sb else None
         from_number = ((settings.data or {}).get("phone") if settings else None) or to_number
 
         addr_snippet = f" for {service_address}" if service_address else ""
