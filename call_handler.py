@@ -410,7 +410,8 @@ async def get_business_config(to_number: str) -> dict:
         r = sb.from_("settings_business").select(
             "aria_personality,business_hours,services_offered,timezone,"
             "max_call_duration_minutes,address,phone,website_url,brand_name,transfer_number,"
-            "announce_recording,recording_consent_text"
+            "announce_recording,recording_consent_text,external_intake_url,zapier_webhook_url,"
+            "emergency_contact_email,emergency_contact_phone,supported_service_areas,industry_vertical"
         ).eq("business_id", biz_id).single().execute()
         result["settings_business"] = r.data or {}
     except:
@@ -1173,6 +1174,17 @@ async def media_stream(websocket: WebSocket):
                     if industry_vert in ("medical", "dental", "veterinary", "medspa"):
                         is_medical = True
 
+                    # ── 3-Way Industry Vertical Fork ─────────────────────────────────────
+                    # Fetch safety settings
+                    emerg_email = settings.get("emergency_contact_email", "") or ""
+                    emerg_phone = settings.get("emergency_contact_phone", "") or ""
+                    service_areas = settings.get("supported_service_areas") or []
+
+                    is_home_services = industry_vert in (
+                        "home_services", "hvac", "plumbing", "electrical",
+                        "roofing", "trades", "contractor", "home_services_trades"
+                    )
+
                     if is_medical:
                         compliance_rule += (
                             "\n\nMEDICAL VERTICAL COMPLIANCE RULES (MANDATORY):\n"
@@ -1187,24 +1199,67 @@ async def media_stream(websocket: WebSocket):
                             "texted you the secure link. If you complete it within 30 minutes, it will "
                             "permanently lock in your time. Otherwise the system will automatically "
                             "release the hold.' Then trigger the intake SMS.\n"
-                            "3. EXISTING PATIENTS: If the caller is already in the system (has a "
-                            "contact record), you may book directly using the Soft Confirm method.\n"
-                            "4. MINOR PROTECTION: If a caller sounds like or states they are under 18, "
-                            "do NOT book restricted medical/aesthetic services. Say: 'For medical "
-                            "appointments, we require a parent or guardian to call on behalf of anyone "
-                            "under 18. Please have them give us a call and we will get everything set up!'\n"
-                            "5. AGE VERIFICATION: For new patient intakes at medical or aesthetic "
-                            "practices, ask for date of birth as part of the intake process.\n"
-                            "6. NO MEDICAL ADVICE: You are an administrative AI assistant. Never provide "
-                            "medical advice, diagnoses, or treatment recommendations. Always say "
-                            "'I am not able to give medical advice — please speak with your provider.'\n"
+                            "3. EXISTING PATIENTS: If the caller is already in the system, you may "
+                            "book directly using the Soft Confirm method.\n"
+                            "4. MINOR PROTECTION: If a caller is or sounds under 18, do NOT book "
+                            "restricted medical/aesthetic services. Ask a parent or guardian to call.\n"
+                            "5. NO MEDICAL ADVICE: Never provide diagnoses or treatment recommendations. "
+                            "Always say 'I am not able to give medical advice — please speak with your provider.'\n"
+                            "5b. PHI OVERSHARER: If caller lists medications, insurance IDs, or medical history, interrupt: To protect your privacy, please save those details for the secure form — I just need your name and phone number. Never allow PHI to be spoken aloud.\\n"
+                            "5c. ANTI-TECH FALLBACK: If caller cannot use texts, say: I completely understand — a human specialist will call you back shortly. Then flag the call as REQUIRES_HUMAN_CALLBACK.\\n"
+                            "6. MVD RULE (MEDICAL): You only need THREE things — First Name, Cell Phone, "
+                            "and reason for call. NEVER ask for home address, email, DOB, insurance, or "
+                            "medical history over the phone. Once you have all three, say exactly: "
+                            "'To save you from spelling everything out, I am texting you our secure "
+                            "registration link right now — it takes about 60 seconds on your phone.' "
+                            "Then immediately trigger the SMS intake link.\n"
                         )
+
+                    elif is_home_services:
+                        compliance_rule += (
+                            "\n\nHOME SERVICES & TRADES PROTOCOL (MANDATORY):\n"
+                            "PHYSICAL EMERGENCY PROTOCOL: If caller reports gas smell, sparking panels, active flooding, or life-threatening hazards, immediately say: Please evacuate and call 911 or your local utility company. I am flagging this as a CRITICAL emergency for our dispatch team. Then stop the booking flow.\\n"
+                            "You are dispatching for a home services company. Customers calling with "
+                            "emergencies (burst pipe, no AC, power out) need immediate help — "
+                            "do NOT send them a form or a link. Complete the entire booking over the phone.\n"
+                            "COLLECT ALL FOUR DATA POINTS VERBALLY:\n"
+                            "1. FIRST AND LAST NAME: Get both first and last name.\n"
+                            "2. CELL PHONE NUMBER: Confirm the best callback number.\n"
+                            "3. SERVICE ADDRESS: Ask 'What is the service address, including city and zip?' "
+                            "MANDATORY ADDRESS READ-BACK: After collecting the address, read it back verbatim: Just to confirm — [repeat full address] — did I get that right? Do NOT trigger the webhook until caller confirms with yes. Missed digits cost drive time.\\n"
+                            "Repeat it back to confirm accuracy.\n"
+                            "4. ISSUE DESCRIPTION: Ask them to briefly describe the problem "
+                            "(e.g., 'broken AC', 'burst pipe under kitchen sink', 'no hot water').\n"
+                            "NEVER send an intake form SMS to home services callers.\n"
+                            "NEVER ask them to click a link or fill out a form.\n"
+                            "Once you have all four data points, say exactly: "
+                            "'Perfect — I have your address and issue logged. I am sending this directly "
+                            "to our dispatch team right now. They will text you shortly with your "
+                            "technician arrival window. Is there anything else I can help with?'\n"
+                            "Then trigger the dispatch confirmation SMS and push to Zapier.\n"
+                        )
+                        if service_areas:
+                            area_list = ", ".join(str(a) for a in service_areas)
+                            compliance_rule += (
+                                f"SERVICE AREA POLICY: Covered areas: {area_list}. "
+                                "If address is outside this area, do NOT decline. Say: "
+                                "I have your address logged. You are slightly outside our "
+                                "standard service radius, but I am flagging this as a "
+                                "priority review for our dispatch manager. They will "
+                                "reach out shortly to confirm. "
+                                "Status: OUT_OF_AREA_REVIEW, still push to Zapier.\\n"
+                            )
+
                     else:
                         compliance_rule += (
                             "\n\nSTANDARD BOOKING RULES:\n"
                             "You do not need to verify age or collect date of birth. Simply ask for the "
                             "caller's name, phone number, and preferred appointment time to finalize the "
                             "booking. Be friendly, efficient, and conversational.\n"
+                            "MVD RULE (GENERAL): Collect First Name, Cell Phone, and reason for call. "
+                            "Do not ask for home address, email, or sensitive personal information "
+                            "unless the caller volunteers it. Once you have Name + Phone + Intent, "
+                            "offer to text them a confirmation or intake link if applicable.\n"
                         )
 
                     # ── After-Hours Detection ─────────────────────────────────────
@@ -1540,6 +1595,63 @@ async def media_stream(websocket: WebSocket):
             try:
                 await save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
                 logger.info(f"Call saved: {call_sid}")
+                # ── Tier 2: Fire Zapier/webhook if configured ────────────────────
+                try:
+                    sb_wh = get_sb()
+                    if sb_wh:
+                        wh_res = sb_wh.from_("settings_business").select("zapier_webhook_url").eq("business_id", business_id).maybeSingle().execute()
+                        zapier_url = (wh_res.data or {}).get("zapier_webhook_url")
+                        if zapier_url:
+                            payload = {
+                                "event": "call.completed",
+                                "business_id": business_id,
+                                "call_sid": call_sid,
+                                "from_number": from_number,
+                                "duration_seconds": duration,
+                                "turn_count": turn_count,
+                                "transcript_summary": full_transcript[:500],
+                                "service_address": extracted.get("service_address", "") if "extracted" in dir() else "",
+                                "caller_name": extracted.get("first_name", "") if "extracted" in dir() else "",
+                                "industry_vertical": industry_vert if "industry_vert" in dir() else "general",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            async with httpx.AsyncClient() as wh_client:
+                                wh_resp = await wh_client.post(zapier_url, json=payload, timeout=5.0)
+                            if 200 <= wh_resp.status_code < 300:
+                                logger.info(f"Zapier webhook fired for {call_sid}")
+                            else:
+                                raise Exception(f"Zapier HTTP {wh_resp.status_code}")
+                except Exception as wh_err:
+                    # ── Failsafe: Zapier is down — alert via SMS and log ───
+                    logger.error(f"Zapier webhook FAILED for {call_sid}: {wh_err}")
+                    try:
+                        sb_fa = get_sb()
+                        biz_fa = sb_fa.from_("businesses").select(
+                            "emergency_contact_email,emergency_contact_phone,name"
+                        ).eq("id", business_id).maybeSingle().execute() if sb_fa else None
+                        ec_phone = (biz_fa.data or {}).get("emergency_contact_phone") if biz_fa else None
+                        ec_email = (biz_fa.data or {}).get("emergency_contact_email") if biz_fa else None
+                        biz_name = (biz_fa.data or {}).get("name", "your business") if biz_fa else "your business"
+                        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+                        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+                        alert_msg = (
+                            f"RECEPTIONIST.CO ALERT: A lead was captured but your webhook failed. "
+                            f"Caller: {from_number} | Summary: {full_transcript[:120]}. "
+                            f"Check your Zapier dashboard and email for full details."
+                        )
+                        if ec_phone and TWILIO_SID and TWILIO_TOKEN:
+                            async with httpx.AsyncClient() as sms_client:
+                                await sms_client.post(
+                                    f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                                    auth=(TWILIO_SID, TWILIO_TOKEN),
+                                    data={"To": ec_phone, "From": to_number, "Body": alert_msg},
+                                    timeout=5.0,
+                                )
+                            logger.info(f"Failsafe SMS sent to {ec_phone}")
+                        if ec_email:
+                            logger.warning(f"SendGrid failsafe email needed for {ec_email} — payload: {payload}")
+                    except Exception as fa_err:
+                        logger.error(f"Failsafe alert failed: {fa_err}")
             except Exception as save_err:
                 logger.error(f"SAVE FAILED for {call_sid}: {save_err}")
             # delete_active_call already fired on stream stop — this is a safety net
@@ -2034,21 +2146,31 @@ async def send_intake_sms(business_id: str, contact_id: str, contact_phone: str,
                            appt_time: str, business_name: str) -> bool:
     """
     Fires immediately after a new patient appointment is booked.
+    Uses external_intake_url (Jane App, Mindbody, ezyVet etc.) when set — Tier 1 integration.
+    Falls back to internal intake_form_url if no external URL configured.
     Compliance: No PHI — just the appointment time and intake form link.
     """
     if not supabase or not contact_phone:
         return False
     try:
-        # Get intake settings
+        # Get intake settings — check for external URL (Tier 1) first
         settings = supabase.table("settings_business").select(
-            "intake_form_url,intake_auto_send,phone"
+            "intake_form_url,intake_auto_send,phone,external_intake_url"
         ).eq("business_id", business_id).single().execute()
         s = settings.data or {}
 
-        if not s.get("intake_auto_send") or not s.get("intake_form_url"):
-            return False  # Intake automation not enabled
+        # Tier 1: use clinic's own system URL (Jane App, Mindbody, ezyVet etc.)
+        external_url = s.get("external_intake_url") or ""
+        internal_url = s.get("intake_form_url") or ""
+        intake_url   = external_url if external_url else internal_url
 
-        intake_url = s["intake_form_url"]
+        if not intake_url:
+            # No intake URL configured at all — skip
+            logger.debug(f"No intake URL configured for {business_id} — skipping intake SMS")
+            return False
+
+        if not s.get("intake_auto_send") and not external_url:
+            return False  # Automation not enabled and no external URL override
         from_number = s.get("phone") or os.getenv("TWILIO_PHONE_NUMBER", "")
 
         msg = (
@@ -2479,4 +2601,98 @@ async def browser_bridge(req: Request):
     except Exception as e:
         logger.error(f"Browser bridge failed: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+async def send_mvd_intake_sms(business_id: str, caller_phone: str, caller_name: str,
+                               business_name: str, to_number: str) -> bool:
+    """
+    Mid-call intake SMS — fires when Aria has collected MVD (Name + Phone + Intent).
+    Sends the clinic's intake URL (external or internal) immediately during the call.
+    This is the Tier 1 'Universal URL' integration pattern.
+    """
+    if not caller_phone:
+        return False
+    try:
+        sb = get_sb()
+        if not sb:
+            return False
+
+        # Get the intake URL — external_intake_url takes priority (Tier 1)
+        settings = sb.from_("settings_business").select(
+            "external_intake_url,phone"
+        ).eq("business_id", business_id).maybeSingle().execute()
+        s = settings.data or {}
+
+        external_url = s.get("external_intake_url") or ""
+        # Fallback to internal link if no external URL set
+        intake_url = external_url or f"https://receptionist.co/intake/{business_id}"
+
+        from_number = s.get("phone") or to_number  # use clinic's own number as sender
+
+        greeting = f"Hi {caller_name}!" if caller_name and caller_name.lower() not in ("unknown","caller") else "Hi!"
+        msg = (
+            f"{greeting} Here's the {business_name} registration link Aria mentioned: "
+            f"{intake_url} — takes about 60 seconds to fill out. "
+            f"Reply STOP to opt out."
+        )
+
+        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        if not TWILIO_SID or not TWILIO_TOKEN:
+            return False
+
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                auth=(TWILIO_SID, TWILIO_TOKEN),
+                data={"To": caller_phone, "From": from_number, "Body": msg},
+                timeout=8.0,
+            )
+        logger.info(f"MVD intake SMS sent to {caller_phone} for {business_id} (url: {intake_url})")
+        return True
+    except Exception as e:
+        logger.error(f"MVD intake SMS error: {e}")
+        return False
+async def send_home_services_confirmation_sms(
+    business_id: str, caller_phone: str, caller_name: str,
+    service_address: str, business_name: str, to_number: str
+) -> bool:
+    """
+    Home Services / Trades confirmation SMS — fires when Aria has collected
+    Name + Phone + Address + Intent. Replaces intake form SMS entirely.
+    Tells caller their job ticket is in and a tech will text them an arrival window.
+    """
+    if not caller_phone:
+        return False
+    try:
+        sb = get_sb()
+        settings = sb.from_("settings_business").select("phone").eq("business_id", business_id).maybeSingle().execute() if sb else None
+        from_number = ((settings.data or {}).get("phone") if settings else None) or to_number
+
+        addr_snippet = f" for {service_address}" if service_address else ""
+        greeting    = f"Hi {caller_name}!" if caller_name and caller_name.lower() not in ("unknown","caller") else "Hi!"
+
+        msg = (
+            f"{greeting} Thanks for calling {business_name}. "
+            f"We've received your service request{addr_snippet} and are sending it to our dispatch team now. "
+            f"A technician will text you shortly with your arrival window. "
+            f"Reply STOP to opt out."
+        )
+
+        TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        if not TWILIO_SID or not TWILIO_TOKEN:
+            return False
+
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
+                auth=(TWILIO_SID, TWILIO_TOKEN),
+                data={"To": caller_phone, "From": from_number, "Body": msg},
+                timeout=8.0,
+            )
+        logger.info(f"Home services confirmation SMS sent to {caller_phone} for {business_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Home services SMS error: {e}")
+        return False
 
