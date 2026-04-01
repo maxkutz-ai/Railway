@@ -95,6 +95,8 @@ Current date and time: {datetime}
 Business timezone: {timezone}
 {custom_instructions}
 
+"━━━ LANGUAGE POLICY ━━━\n"
+"ENGLISH ONLY: You always respond in English regardless of what language the caller uses. If someone speaks Spanish, French, or any other language, respond: I am sorry, I can only assist in English. Can I help you in English? Never switch to another language under any circumstance.\n"
 "━━━ FOCUS & SCOPE (MANDATORY) ━━━\n"
 ""You are a business receptionist — not a general-purpose AI. Never answer questions about weather, news, sports, holidays, politics, science, religion, or any topic unrelated to this business. If asked off-topic, redirect warmly: 'That\'s a great question, but I\'m here specifically to help with [business name]. Can I help with an appointment or answer questions about our services?' Stay warm, stay on-task.\n
 
@@ -430,8 +432,9 @@ async def get_business_config(to_number: str) -> dict:
 
     # ── ai_receptionist_config ────────────────────────────────────────────────
     try:
-        r = sb.from_("ai_receptionist_config").select("name,greeting,escalation_phone").eq("business_id", biz_id).maybe_single().execute()
-        result["ai_config"] = r.data or {}
+        # ai_receptionist_config table not present — skip gracefully
+        r = None
+        result["ai_config"] = None or {}
     except:
         result["ai_config"] = {}
 
@@ -572,19 +575,23 @@ async def extract_lead_from_transcript(
         # UPSERT — match on (business_id, phone)
         # If caller already exists → update name/email/summary
         # If new caller → create the record
-        upsert_result = sb.from_("contacts").upsert(
+        upsert_result = sb.table("contacts").upsert(
             contact_row,
             on_conflict="business_id,phone_hash",
-        ).select("id").execute()
+        ).execute()
+        if not (upsert_result.data and upsert_result.data[0].get("id")):
+            id_result = sb.table("contacts").select("id").eq(
+                "business_id", business_id
+            ).eq("phone_hash", contact_row["phone_hash"]).maybe_single().execute()
+            if id_result.data:
+                upsert_result = type("R", (), {"data": [id_result.data]})()
 
         logger.info(f"Contact upserted: {phone_clean} for {business_id}")
 
         # Link the contact back to the call record so Recent Activity shows name
         if upsert_result.data and call_sid:
             contact_id = upsert_result.data[0]["id"]
-            sb.from_("calls").update({
-                "contact_id": contact_id,
-            }).eq("twilio_call_sid", call_sid).execute()
+            sb.table("calls").update({"contact_id": contact_id}).eq("twilio_call_sid", call_sid).execute()
             logger.info(f"Linked call {call_sid} → contact {contact_id}")
 
     except Exception as e:
@@ -1459,13 +1466,18 @@ async def media_stream(websocket: WebSocket):
                         current_item_id = data.get("item_id")
                     # Track ~ms of audio sent (g711_ulaw = 8 bytes/ms)
                     audio_ms_sent += len(data["delta"]) * 3 // 4 // 8
-                    await websocket.send_text(json.dumps({
-                        "event":     "media",
-                        "streamSid": stream_sid,
-                        "media":     {"payload": data["delta"]},
-                    }))
+                    try:
+                        await websocket.send_text(json.dumps({
 
-                elif event_type == "response.audio_transcript.done":
+
+                            "event":     "media",
+                            "streamSid": stream_sid,
+                            "media":     {"payload": data["delta"]},
+                        }))
+                    except Exception:
+                        pass  # Twilio disconnected
+
+
                     is_responding = False  # response finished
                     text = data.get("transcript", "")
                     if text:
