@@ -2442,6 +2442,27 @@ async def appointment_completed_hook(request: Request):
 
 
 # ── Warm Handoff — inject transfer prompt into live OpenAI stream ──────────────
+@app.post("/twiml/browser-answer")
+async def twiml_browser_answer(req: Request):
+    """
+    TwiML endpoint called by Twilio when transferring a call to a browser Client.
+    Returns <Dial><Client>identity</Client></Dial>.
+    Called by Railway's transfer_call when mode='browser'.
+    """
+    body = await req.json() if req.headers.get("content-type","").startswith("application/json") else {}
+    form = await req.form() if not body else {}
+    identity = (body.get("identity") or form.get("To","")).strip()
+    if not identity:
+        identity = "staff"
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial timeout="30" callerId="+18889732377">
+    <Client>{identity}</Client>
+  </Dial>
+</Response>"""
+    return Response(content=twiml, media_type="application/xml")
+
+
 @app.post("/warm-handoff")
 async def warm_handoff(req: Request):
     """
@@ -2564,8 +2585,40 @@ async def transfer_call(req: Request):
     call_sid    = body.get("call_sid")
     transfer_to = body.get("transfer_to")  # E.164 phone number
 
-    if not call_sid or not transfer_to:
-        return JSONResponse({"ok": False, "error": "call_sid and transfer_to required"}, status_code=400)
+    mode        = body.get("mode", "phone")   # "browser" or "phone"
+    identity    = body.get("identity", "")    # browser client identity for mode=browser
+
+    if not call_sid:
+        return JSONResponse({"ok": False, "error": "call_sid required"}, status_code=400)
+
+    # Browser mode: redirect call to browser Client instead of a phone number
+    if mode == "browser" and identity:
+        try:
+            client = Client(
+                os.environ.get("TWILIO_ACCOUNT_SID",""),
+                os.environ.get("TWILIO_AUTH_TOKEN","")
+            )
+            # Redirect the Twilio call to our browser-answer TwiML
+            APP_BASE = os.environ.get("CRM_BASE_URL", "https://app.receptionist.co")
+            RAILWAY_URL = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "https://aria-call-handler-production.up.railway.app")
+            twiml_url = f"{RAILWAY_URL}/twiml/browser-answer"
+            client.calls(call_sid).update(
+                url=twiml_url,
+                method="POST",
+                status_callback=f"{RAILWAY_URL}/twilio-status",
+            )
+            # POST the identity to the TwiML endpoint via status_callback_event isn't right
+            # Instead, build the TwiML inline and update
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?><Response><Dial timeout="30"><Client>{identity}</Client></Dial></Response>"""
+            client.calls(call_sid).update(twiml=twiml)
+            logger.info(f"Call {call_sid} redirected to browser client {identity}")
+            return JSONResponse({"ok": True, "message": f"Call transferred to browser client {identity}"})
+        except Exception as e:
+            logger.error(f"Browser transfer failed: {e}")
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    if not transfer_to:
+        return JSONResponse({"ok": False, "error": "transfer_to required for phone mode"}, status_code=400)
 
     # ── Normalize transfer number to E.164 ─────────────────────────────────
     # Strip spaces, dashes, parens
@@ -2642,24 +2695,47 @@ async def twilio_access_token(request: Request):
     """
     import base64, hmac, hashlib, time, json as _json_std
 
-    TWILIO_SID      = os.environ.get("TWILIO_ACCOUNT_SID", "")
-    TWILIO_TOKEN    = os.environ.get("TWILIO_AUTH_TOKEN", "")
-    TWILIO_APP_SID  = os.environ.get("TWILIO_TWIML_APP_SID", "")  # TwiML App SID for browser calling
+    # AccessToken requires API Key SID + Secret (NOT Auth Token)
+    # Create these in Twilio Console → Account → API keys & tokens
+    TWILIO_ACCOUNT_SID  = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    TWILIO_API_KEY_SID  = os.environ.get("TWILIO_API_KEY_SID", "")
+    TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET", "")
+    TWILIO_APP_SID      = os.environ.get("TWILIO_TWIML_APP_SID", "")
 
-    if not TWILIO_SID or not TWILIO_TOKEN:
-        return JSONResponse({"ok": False, "error": "Twilio not configured"}, status_code=500)
+    if not TWILIO_ACCOUNT_SID or not TWILIO_API_KEY_SID or not TWILIO_API_KEY_SECRET:
+        missing = []
+        if not TWILIO_API_KEY_SID:     missing.append("TWILIO_API_KEY_SID")
+        if not TWILIO_API_KEY_SECRET:  missing.append("TWILIO_API_KEY_SECRET")
+        if not TWILIO_APP_SID:         missing.append("TWILIO_TWIML_APP_SID")
+        return JSONResponse({
+            "ok": False,
+            "error": f"Missing Railway env vars: {', '.join(missing)}. "
+                     f"Create an API Key in Twilio Console → Account → API keys & tokens."
+        }, status_code=500)
+
+    if not TWILIO_APP_SID:
+        return JSONResponse({
+            "ok": False,
+            "error": "TWILIO_TWIML_APP_SID not set. Create a TwiML App in Twilio Console → Voice → TwiML Apps."
+        }, status_code=500)
 
     try:
         from twilio.jwt.access_token import AccessToken
         from twilio.jwt.access_token.grants import VoiceGrant
 
         identity = f"staff-{int(time.time())}"
-        token = AccessToken(TWILIO_SID, TWILIO_APP_SID or TWILIO_SID, TWILIO_TOKEN,
-                           identity=identity, ttl=3600)
+        # Correct signature: AccessToken(account_sid, api_key_sid, api_key_secret)
+        token = AccessToken(
+            TWILIO_ACCOUNT_SID,
+            TWILIO_API_KEY_SID,
+            TWILIO_API_KEY_SECRET,
+            identity=identity,
+            ttl=3600
+        )
 
         voice_grant = VoiceGrant(
-            outgoing_application_sid=TWILIO_APP_SID or TWILIO_SID,
-            incoming_allow=True,  # allow browser to receive incoming calls
+            outgoing_application_sid=TWILIO_APP_SID,
+            incoming_allow=True,
         )
         token.add_grant(voice_grant)
 
