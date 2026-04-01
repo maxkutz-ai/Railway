@@ -1074,6 +1074,7 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
     except Exception as e:
         logger.error(f"save_call_record error: {e}")
 
+@app.get("/health")
 async def health():
     """
     Health check endpoint — monitored by UptimeRobot every 1 minute.
