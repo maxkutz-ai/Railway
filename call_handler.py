@@ -1132,6 +1132,7 @@ async def media_stream(websocket: WebSocket):
     from_number   = ""
     transcript    = []
     transcript_turns = []   # [{role, text, ts}] with per-turn timestamps
+    last_cancel_at   = 0.0   # timestamp of last response.cancel — prevents ghost transcripts
     start_time    = None  # set when Twilio start event fires (actual call start)
     business_cfg  = {}
     business_id   = ""
@@ -1156,7 +1157,7 @@ async def media_stream(websocket: WebSocket):
         # Register for warm-handoff injection (populated once call_sid is known)
 
         async def receive_from_twilio():
-            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, call_active, to_number, from_number, call_active
+            nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, last_cancel_at, call_active, to_number, from_number, call_active
             async for message in websocket.iter_text():
                 data  = json.loads(message)
                 event = data.get("event")
@@ -1565,9 +1566,11 @@ async def media_stream(websocket: WebSocket):
 
                 elif event_type == "response.audio_transcript.done":
                     # Aria finished speaking — store her full transcript turn
+                    # Skip if this fires within 1s of a cancel (ghost transcript from cancelled response)
+                    import time as _time
                     is_responding = False
                     text = data.get("transcript", "")
-                    if text:
+                    if text and (_time.monotonic() - last_cancel_at) > 1.0:
                         transcript.append(f"Aria: {text}")
                         _now = datetime.now(timezone.utc).isoformat()
                         transcript_turns.append({"role":"ai","text":text,"ts":_now})
@@ -2469,6 +2472,7 @@ async def warm_handoff(req: Request):
         # Cancel any active response first — wait for it to propagate
         try:
             await openai_ws.send(json.dumps({"type": "response.cancel"}))
+            import time as _time; last_cancel_at = _time.monotonic()
             await asyncio.sleep(0.3)  # give OpenAI time to process the cancel
         except Exception:
             pass
