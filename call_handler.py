@@ -199,11 +199,23 @@ BOOKING WORKFLOW:
 4. Once you have name + email + phone + time, call book_appointment immediately.
 5. After booking: "Perfect! I just sent a confirmation link to [email]. 
    Please click it within 24 hours to finalize your appointment."
+6. IMMEDIATELY after confirming the booking (step 5), ask for special arrival instructions:
+   - For home services / trades:
+     "Great, you're all booked for [date/time]. Before I let you go — are there any gate
+      codes, parking instructions, or pets the technician should know about before they arrive?"
+   - For medical / clinic:
+     "Wonderful, you're booked for [date/time]. Is there anything our team should know
+      before your visit — accessibility needs, allergies, or any special requirements?"
+   - If the caller provides instructions: pass them as the `special_instructions` parameter
+     when you call `book_appointment`. Extract their exact words.
+   - If the caller says "No" or "Nothing": pass null for `special_instructions`.
+   - This question is MANDATORY on every booking. Never skip it.
 
 IMPORTANT:
 - Never promise a time without running check_availability first
 - Never book without collecting name, email, AND phone
 - If check_availability returns an error, offer to take a message instead
+- Always ask for special instructions AFTER confirming the booking, NEVER before
 ━━━ END BOOKING RULES ━━━
 
 ━━━ EMERGENCY BYPASS RULE ━━━
@@ -825,31 +837,70 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
             return "System error: Unable to load calendar. Please apologize and offer to have someone call them back to schedule."
 
     elif fn_name == "book_appointment":
-        start_time = fn_args.get("startTime", "")
-        name       = fn_args.get("name", "")
-        email      = fn_args.get("email", "")
-        phone      = fn_args.get("phone", "")
+        start_time            = fn_args.get("startTime", "")
+        name                  = fn_args.get("name", "")
+        email                 = fn_args.get("email", "")
+        phone                 = fn_args.get("phone", "")
+        special_instructions  = fn_args.get("special_instructions") or None
 
         if not all([start_time, name, email]):
             return "I need the caller's name, email, and preferred time before booking. Please collect any missing details."
+
+        # Build calendar notes — append special instructions if provided
+        cal_notes = "Booked by Aria via phone call."
+        if special_instructions:
+            cal_notes += "\n\n\u26a0\ufe0f SPECIAL INSTRUCTIONS: " + special_instructions
 
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     f"{CRM_BASE}/api/cal/book",
                     json={
-                        "business_id":   business_id,
-                        "start_time":    start_time,
-                        "contact_name":  name,
-                        "contact_email": email,
-                        "contact_phone": phone,
-                        "notes":         "Booked by Aria via phone",
+                        "business_id":          business_id,
+                        "start_time":           start_time,
+                        "contact_name":         name,
+                        "contact_email":        email,
+                        "contact_phone":        phone,
+                        "notes":                cal_notes,
+                        "special_instructions": special_instructions,
                     },
                     timeout=10.0,
                 )
             if resp.is_success:
+                booking_data = resp.json()
+                contact_id   = booking_data.get("contact_id")
+
+                # ── Write special instructions to CRM notes (Aria-authored) ────
+                if special_instructions and contact_id:
+                    try:
+                        sb = get_sb()
+                        if sb:
+                            # 1. Update contact's industry_specific_data with the instructions
+                            existing = sb.from_("contacts").select("industry_specific_data").eq("id", contact_id).execute()
+                            isd = (existing.data[0].get("industry_specific_data") or {}) if existing.data else {}
+                            isd["special_instructions"] = special_instructions
+                            sb.from_("contacts").update({
+                                "industry_specific_data": isd
+                            }).eq("id", contact_id).execute()
+
+                            # 2. Append to ai_notes as Aria-authored entry
+                            timestamp = __import__("datetime").datetime.utcnow().isoformat() + "Z"
+                            note_entry = f"[{timestamp}] Aria (AI Captured): Special Instructions: {special_instructions}"
+                            existing_notes = sb.from_("contacts").select("ai_notes").eq("id", contact_id).execute()
+                            prev_notes = (existing_notes.data[0].get("ai_notes") or "") if existing_notes.data else ""
+                            sb.from_("contacts").update({
+                                "ai_notes": (prev_notes + "\n\n" + note_entry).strip()
+                            }).eq("id", contact_id).execute()
+                            logger.info(f"Special instructions saved for contact {contact_id}")
+                    except Exception as note_err:
+                        logger.warning(f"Could not save special instructions to CRM (non-fatal): {note_err}")
+
+                instructions_confirmed = (
+                    f" I've also noted your instructions for the technician."
+                    if special_instructions else ""
+                )
                 return (
-                    f"Booking successful. Tell the caller you just sent a confirmation link "
+                    f"Booking successful.{instructions_confirmed} Tell the caller you just sent a confirmation link "
                     f"to {email} and they need to click it to finalize the appointment. "
                     f"Remind them to check their spam folder if they don't see it within a minute."
                 )
@@ -1577,7 +1628,11 @@ async def media_stream(websocket: WebSocket):
                                             },
                                             "name":  {"type": "string"},
                                             "email": {"type": "string"},
-                                            "phone": {"type": "string"}
+                                            "phone": {"type": "string"},
+                                            "special_instructions": {
+                                                "type": "string",
+                                                "description": "Gate codes, pets, parking notes, accessibility needs, or any arrival instructions the caller provided. Leave null if none."
+                                            }
                                         },
                                         "required": ["startTime", "name", "email", "phone"]
                                     }
