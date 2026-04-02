@@ -742,6 +742,11 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                 cfg = sb.from_("ai_receptionist_config").select("escalation_phone").eq("business_id", business_id).maybe_single().execute()
                 transfer_number = cfg.data.get("escalation_phone") if cfg.data else None
 
+            # Safety guard: never transfer back to the caller's own number
+            if transfer_number and transfer_number == from_number:
+                logger.warning(f"Blocked self-transfer: transfer_number matches caller {from_number}. Set a real transfer number in CRM Settings.")
+                transfer_number = None
+
             if transfer_number:
                 TWILIO_SID   = os.environ.get("TWILIO_ACCOUNT_SID", "")
                 TWILIO_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
@@ -766,8 +771,8 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                         logger.warning(f"Transfer failed: {resp.status_code}")
                 return f"Transfer initiated to {transfer_number}. Tell the caller you're connecting them."
             else:
-                logger.warning(f"No emergency transfer number for {business_id}")
-                return "No transfer number configured for this account. Tell the caller: 'I'm so sorry — I'm not able to complete the transfer right now as our specialists are temporarily unavailable. Let me take your contact information and ensure someone calls you back within the next few minutes. May I get your name and best callback number?hin minutes. May I confirm the best number to reach you?'"
+                logger.warning(f"No transfer number configured for {business_id} — blocking AI transfer")
+                return "No transfer number configured for this account. Tell the caller exactly this: 'I apologize — I am not able to transfer your call right now. Let me take your contact details and have someone call you back shortly.' Then collect their name and phone number.sorry — I'm not able to complete the transfer right now as our specialists are temporarily unavailable. Let me take your contact information and ensure someone calls you back within the next few minutes. May I get your name and best callback number?hin minutes. May I confirm the best number to reach you?'"
         except Exception as e:
             logger.warning(f"transfer_call error: {e}")
             return "Transfer system error. Tell the caller you'll have someone call them back immediately and take their number."
@@ -2724,21 +2729,33 @@ async def transfer_call(req: Request):
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     # Phone mode: if transfer_to not explicitly provided, look it up from settings_business
+    # IMPORTANT: uses httpx directly to avoid `from supabase import create_client`
+    # creating a local variable that shadows the module-level asyncio import (Python 3.12 bug)
     if mode == "phone" and not transfer_to:
         try:
-            SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-            SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-            from supabase import create_client
-            sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-            # Look up business_id from call_sid in active_calls
-            ac = sb.from_("active_calls").select("business_id").eq("call_sid", call_sid).maybe_single().execute()
-            if ac.data:
-                biz_id = ac.data["business_id"]
-                st = sb.from_("settings_business").select("transfer_number").eq("business_id", biz_id).maybe_single().execute()
-                if st.data and st.data.get("transfer_number"):
-                    transfer_to = st.data["transfer_number"]
-        except Exception as e:
-            logger.warning(f"Auto-lookup of transfer_number failed: {e}")
+            _sb_url = os.environ.get("SUPABASE_URL", "")
+            _sb_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            _headers = {"apikey": _sb_key, "Authorization": f"Bearer {_sb_key}"}
+            async with httpx.AsyncClient() as _hc:
+                _ac = await _hc.get(
+                    f"{_sb_url}/rest/v1/active_calls",
+                    params={"select": "business_id", "call_sid": f"eq.{call_sid}"},
+                    headers=_headers, timeout=5.0
+                )
+                _rows = _ac.json()
+                if _rows:
+                    _biz_id = _rows[0].get("business_id")
+                    if _biz_id:
+                        _st = await _hc.get(
+                            f"{_sb_url}/rest/v1/settings_business",
+                            params={"select": "transfer_number", "business_id": f"eq.{_biz_id}"},
+                            headers=_headers, timeout=5.0
+                        )
+                        _st_rows = _st.json()
+                        if _st_rows and _st_rows[0].get("transfer_number"):
+                            transfer_to = _st_rows[0]["transfer_number"]
+        except Exception as _e:
+            logger.warning(f"Auto-lookup of transfer_number failed: {_e}")
 
     if not transfer_to:
         return JSONResponse({"ok": False, "error": "transfer_to required — set your transfer number in CRM Settings → Warm Handoff"}, status_code=400)
