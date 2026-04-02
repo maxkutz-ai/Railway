@@ -37,7 +37,7 @@ except ImportError:
 import httpx
 import websockets
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from supabase import create_client
 from dotenv import load_dotenv
 
@@ -1459,6 +1459,41 @@ async def media_stream(websocket: WebSocket):
                     if len(caller_fmt) == 10:
                         caller_fmt = f"({caller_fmt[:3]}) {caller_fmt[3:6]}-{caller_fmt[6:]}"
 
+                    # ── KB RAG: embed caller's first message & retrieve top-3 chunks ──────
+                    # Runs ONCE at call start using the to_number as context seed.
+                    # Subsequent turns use the session context already in the model.
+                    kb_block = ""
+                    try:
+                        OPENAI_KEY_HTTP = os.environ.get("OPENAI_API_KEY", "")
+                        if OPENAI_KEY_HTTP and biz_id:
+                            # Embed a representative query from the greeting context
+                            seed_text = f"Questions about {biz_name} services, pricing, hours, booking, contact"
+                            emb_res = httpx.post(
+                                "https://api.openai.com/v1/embeddings",
+                                headers={"Authorization": f"Bearer {OPENAI_KEY_HTTP}"},
+                                json={"model": "text-embedding-3-small", "input": seed_text},
+                                timeout=4.0,
+                            )
+                            if emb_res.status_code == 200:
+                                vec = emb_res.json()["data"][0]["embedding"]
+                                # Vector similarity search — top 3 chunks, allow_on_voice=true
+                                kb_rows = sb.rpc("match_knowledge", {
+                                    "query_embedding": vec,
+                                    "match_count":     3,
+                                    "business_id_filter": biz_id,
+                                }).execute()
+                                if kb_rows.data:
+                                    chunks = [r["raw_content"] for r in kb_rows.data if r.get("raw_content")]
+                                    if chunks:
+                                        kb_block = (
+                                            "\n━━━ KNOWLEDGE BASE ━━━\n"
+                                            + "\n---\n".join(chunks)
+                                            + "\n━━━ END KNOWLEDGE BASE ━━━"
+                                        )
+                                        logger.info(f"KB RAG: injected {len(chunks)} chunks for {biz_id}")
+                    except Exception as kb_err:
+                        logger.warning(f"KB RAG failed (non-fatal): {kb_err}")
+
                     system_prompt = SYSTEM_PROMPT_BASE.format(
                         business_name=biz_name,
                         aria_name=aria_name,
@@ -1471,7 +1506,7 @@ async def media_stream(websocket: WebSocket):
                         emergency_keywords=emergency_str,
                         caller_number=caller_fmt or "unknown",
                         caller_last4=caller_last4 or "????",
-                    ) + memory_block + services_block
+                    ) + memory_block + services_block + kb_block
 
                     # ── Session config with tuned VAD + barge-in ──────────
                     await openai_ws.send(json.dumps({
@@ -2618,6 +2653,55 @@ async def cancel_handoff(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/transfer-status")
+async def transfer_status(request: Request):
+    """
+    Twilio calls this when a <Dial> leg ends.
+    DialCallStatus values: completed, no-answer, busy, failed, canceled
+    If the transfer was not answered, automatically restore Aria.
+    """
+    form             = await request.form()
+    dial_status      = form.get("DialCallStatus", "")
+    call_sid         = request.query_params.get("call_sid", "")
+
+    logger.info(f"transfer-status: {call_sid} dial_status={dial_status}")
+
+    # If nobody picked up, bring Aria back immediately
+    no_answer_statuses = {"no-answer", "busy", "failed", "canceled"}
+    if dial_status in no_answer_statuses and call_sid:
+        openai_ws = _active_openai_ws.get(call_sid)
+        if openai_ws:
+            try:
+                apology = (
+                    "SYSTEM: The transfer was not answered. "
+                    "Resume speaking to the caller now. Say: "
+                    "'I'm sorry about that — it seems our team member is unavailable right now. "
+                    "I'm back and happy to keep helping you. What would you like to do?'"
+                )
+                await openai_ws.send(json.dumps({
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type":    "message",
+                        "role":    "system",
+                        "content": [{"type": "input_text", "text": apology}],
+                    }
+                }))
+                await openai_ws.send(json.dumps({"type": "response.create"}))
+                logger.info(f"Aria restored after no-answer transfer: {call_sid}")
+            except Exception as e:
+                logger.warning(f"Could not restore Aria: {e}")
+        else:
+            logger.warning(f"No active OpenAI stream for {call_sid} — caller may have hung up")
+
+    # Return empty TwiML — Twilio needs a valid response
+    # <Hangup/> would disconnect the caller, so we return empty <Response/>
+    # which lets Twilio continue with the call in whatever state it's in
+    return Response(
+        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+        media_type="text/xml"
+    )
+
+
 @app.post("/restore-ai")
 async def restore_ai(req: Request):
     """
@@ -2812,7 +2896,18 @@ async def transfer_call(req: Request):
 
         if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
             import httpx
-            twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial timeout="30" callerId="+18889732377"><Number>{transfer_to}</Number></Dial></Response>'
+            # action= fires when the Dial leg ends (no-answer, busy, completed, failed)
+            # We use it to detect a missed transfer and restore Aria automatically
+            action_url = f"{RAILWAY_PUBLIC_URL}/transfer-status?call_sid={call_sid}" if RAILWAY_PUBLIC_URL else ""
+            action_attr = f'action="{action_url}" ' if action_url else ""
+            twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            f'<Response>'
+            f'<Dial timeout="30" callerId="+18889732377" {action_attr}>'
+            f'<Number>{transfer_to}</Number>'
+            f'</Dial>'
+            f'</Response>'
+            )
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Calls/{call_sid}.json",
