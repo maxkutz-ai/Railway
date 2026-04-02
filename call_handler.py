@@ -2613,6 +2613,52 @@ async def cancel_handoff(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/restore-ai")
+async def restore_ai(req: Request):
+    """
+    Called when a transfer fails (no-answer, busy, or timeout).
+    Resumes Aria on the call so the caller isn't left in silence.
+    """
+    body     = await req.json()
+    call_sid = body.get("call_sid")
+    openai_ws = _active_openai_ws.get(call_sid)
+
+    if not openai_ws:
+        return JSONResponse({"ok": False, "error": "No active stream for this call"}, status_code=404)
+
+    try:
+        # Re-inject Aria with an apology and offer to continue helping
+        resume_message = (
+            body.get("message") or
+            "I'm sorry about that — it seems our team member is unavailable right now. "
+            "I'm back and happy to keep helping you. What would you like to do?"
+        )
+        await asyncio.sleep(0.3)
+        await openai_ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "[SYSTEM: Transfer failed or was not answered. Resume as Aria and say the following apology to the caller.]"}]
+            }
+        }))
+        await asyncio.sleep(0.1)
+        await openai_ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": resume_message}]
+            }
+        }))
+        await openai_ws.send(json.dumps({"type": "response.create"}))
+        logger.info(f"Aria resumed after failed transfer: {call_sid}")
+        return JSONResponse({"ok": True, "message": "Aria resumed"})
+    except Exception as e:
+        logger.error(f"restore-ai failed: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/transfer-call")
 async def transfer_call(req: Request):
     """
@@ -2677,8 +2723,25 @@ async def transfer_call(req: Request):
             logger.error(f"Browser transfer failed: {e}")
             return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
+    # Phone mode: if transfer_to not explicitly provided, look it up from settings_business
+    if mode == "phone" and not transfer_to:
+        try:
+            SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+            SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            from supabase import create_client
+            sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Look up business_id from call_sid in active_calls
+            ac = sb.from_("active_calls").select("business_id").eq("call_sid", call_sid).maybe_single().execute()
+            if ac.data:
+                biz_id = ac.data["business_id"]
+                st = sb.from_("settings_business").select("transfer_number").eq("business_id", biz_id).maybe_single().execute()
+                if st.data and st.data.get("transfer_number"):
+                    transfer_to = st.data["transfer_number"]
+        except Exception as e:
+            logger.warning(f"Auto-lookup of transfer_number failed: {e}")
+
     if not transfer_to:
-        return JSONResponse({"ok": False, "error": "transfer_to required for phone mode"}, status_code=400)
+        return JSONResponse({"ok": False, "error": "transfer_to required — set your transfer number in CRM Settings → Warm Handoff"}, status_code=400)
 
     # ── Normalize transfer number to E.164 ─────────────────────────────────
     # Strip spaces, dashes, parens
