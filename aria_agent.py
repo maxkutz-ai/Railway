@@ -1879,9 +1879,11 @@ def build_system_prompt(biz_ctx: dict, memories: list, location: str, video_coun
 
     loc_text = location or f"{city}, {state}".strip(", ") or "unknown"
     kb_text = ""
+    _biz_id_for_kb = biz_ctx.get("business", {}).get("id", "") or biz_ctx.get("business_id", "")
     try:
         sb_kb = get_supabase()
-        if sb_kb and business_id:
+        if sb_kb and _biz_id_for_kb:
+            business_id = _biz_id_for_kb  # make available for the rest of the block
             kb_res = sb_kb.from_("ai_memory").select("memory_key,memory_value").eq("business_id", business_id).in_("category", ["general","business_rule","instruction"]).order("created_at", desc=True).limit(10).execute()
             if kb_res.data:
                 snippets = [f"{_sanitize_for_prompt(r['memory_key'])}: {_sanitize_for_prompt(r['memory_value'])[:200]}" for r in kb_res.data if r.get("memory_value")]
@@ -3794,7 +3796,7 @@ ONBOARDING RULES:
             min_speech_duration=0.05,
             activation_threshold=0.35,
         ),
-        allow_interruptions=True,
+        # allow_interruptions=True,  # deprecated - handled by turn_handling
     )
 
     SIMLI_FACE_ID = os.getenv("SIMLI_FACE_ID", "b9e5fba3-071a-4e35-896e-211c4d6eaa7b")
