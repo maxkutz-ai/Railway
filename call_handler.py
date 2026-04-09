@@ -73,6 +73,36 @@ APP_URL           = os.environ.get("NEXT_PUBLIC_APP_URL", "https://app.reception
 
 OPENAI_VOICE      = "alloy"   # fallback — overridden per-business from DB
 
+# ── Fail-deadly startup validation ────────────────────────────────────────────
+# Matches the encryption.py pattern for ENCRYPTION_KEY. If OPENAI_API_KEY
+# disappears from Railway env vars, we want the server to refuse to start —
+# not to start cleanly and then silently fail mid-WebSocket-handshake on
+# every inbound call (which is exactly what happened on 2026-04-09 when
+# the gpt-4o-realtime-preview model was removed and we had no diagnostics).
+def _validate_openai_key_on_startup():
+    if not OPENAI_API_KEY:
+        raise SystemExit(
+            "\n\n"
+            "╔═══════════════════════════════════════════════════════════╗\n"
+            "║  FATAL: OPENAI_API_KEY env var is not set.                ║\n"
+            "║                                                           ║\n"
+            "║  Aria cannot answer calls without the OpenAI Realtime     ║\n"
+            "║  API. Set in Railway → aria-call-handler → Variables:     ║\n"
+            "║  OPENAI_API_KEY = sk-...                                  ║\n"
+            "║                                                           ║\n"
+            "║  Get a key: https://platform.openai.com/api-keys          ║\n"
+            "╚═══════════════════════════════════════════════════════════╝\n"
+        )
+    if not OPENAI_API_KEY.startswith(("sk-", "sk_")):
+        # Non-fatal warning — some custom proxies use different prefixes,
+        # so we log but don't exit. Most legit keys start with sk-.
+        print(
+            f"WARNING: OPENAI_API_KEY does not start with 'sk-' or 'sk_' "
+            f"(got prefix '{OPENAI_API_KEY[:4]}...'). Verify key is correct."
+        )
+
+_validate_openai_key_on_startup()
+
 # Legacy — services now embedded in SYSTEM_PROMPT_BASE
 RECEPTIONIST_SERVICES_BLOCK = """
 ━━━ RECEPTIONIST.CO PLATFORM — YOU ARE THE DEMO ━━━
@@ -1333,14 +1363,40 @@ async def media_stream(websocket: WebSocket):
     openai_ws = None
 
     try:
-        openai_ws = await websockets.connect(
-            "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
-            additional_headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta":   "realtime=v1",
-            }
-        )
-        logger.info("Connected to OpenAI Realtime")
+        # ── OpenAI Realtime GA endpoint ──────────────────────────────────
+        # Migrated April 2026 from `gpt-4o-realtime-preview` (beta, removed
+        # from the API in March 2026 per OpenAI's Sep 2025 deprecation
+        # notice) to `gpt-realtime` (the GA model released mid-2025).
+        # The `OpenAI-Beta: realtime=v1` header is a beta-only marker and
+        # is not used in the GA interface — removing it per OpenAI's GA
+        # WebSocket example at:
+        # https://developers.openai.com/api/docs/guides/realtime-websocket
+        try:
+            openai_ws = await asyncio.wait_for(
+                websockets.connect(
+                    "wss://api.openai.com/v1/realtime?model=gpt-realtime",
+                    additional_headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    },
+                    open_timeout=10,
+                ),
+                timeout=12,
+            )
+            logger.info("Connected to OpenAI Realtime (model=gpt-realtime)")
+        except asyncio.TimeoutError:
+            key_prefix = OPENAI_API_KEY[:8] if OPENAI_API_KEY else "EMPTY"
+            logger.error(
+                f"OpenAI Realtime handshake timed out after 10s. "
+                f"Key present: {bool(OPENAI_API_KEY)}, prefix: {key_prefix}..."
+            )
+            raise
+        except Exception as e:
+            key_prefix = OPENAI_API_KEY[:8] if OPENAI_API_KEY else "EMPTY"
+            logger.error(
+                f"OpenAI Realtime connect failed: {type(e).__name__}: {e} | "
+                f"Key present: {bool(OPENAI_API_KEY)}, prefix: {key_prefix}..."
+            )
+            raise
         # Register for warm-handoff injection (populated once call_sid is known)
 
         async def receive_from_twilio():
@@ -1691,9 +1747,17 @@ async def media_stream(websocket: WebSocket):
                     ) + memory_block + services_block + kb_block
 
                     # ── Session config with tuned VAD + barge-in ──────────
+                    # GA interface (April 2026): session.type is now REQUIRED.
+                    # Beta shape without it will be rejected. The other fields
+                    # (input_audio_format, voice, instructions, etc.) are kept
+                    # flat — the GA interface accepts the legacy flat shape as
+                    # of April 2026, but may require nesting under session.audio
+                    # in a future deprecation. See:
+                    # https://developers.openai.com/api/docs/guides/realtime
                     await openai_ws.send(json.dumps({
                         "type": "session.update",
                         "session": {
+                            "type": "realtime",
                             "turn_detection": {
                                 "type":                "server_vad",
                                 "threshold":           0.6,    # less sensitive = fewer false triggers
