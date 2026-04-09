@@ -720,7 +720,25 @@ async def extract_lead_from_transcript(
         # Build the contact row
         # Normalize to 10 raw digits — consistent regardless of format
         # "(720) 651-1325", "720-651-1325", "+17206511325", "7206511325" → "7206511325"
-        raw_phone   = (extracted.get("phone") or "") or from_number or ""
+        #
+        # IMPORTANT: extractor sometimes returns partial phones when the
+        # caller says things like "ending in 1325" — the LLM faithfully
+        # captures "1325" which is truthy but useless. Fall back to
+        # from_number whenever the extracted phone has fewer than 10
+        # digits after stripping non-numerics. This bridges the
+        # "1325 → 7206511325" gap seen in test calls.
+        extracted_phone = (extracted.get("phone") or "")
+        extracted_digits = re.sub(r"\D", "", extracted_phone)
+        if extracted_digits.startswith("1") and len(extracted_digits) == 11:
+            extracted_digits = extracted_digits[1:]
+        # Use extracted only if it has the full 10 digits; otherwise use the
+        # caller ID as the source of truth
+        if len(extracted_digits) >= 10:
+            raw_phone = extracted_phone
+        else:
+            if extracted_digits:
+                logger.info(f"Lead extractor: discarding partial phone '{extracted_phone}' ({len(extracted_digits)} digits), falling back to from_number {from_number}")
+            raw_phone = from_number or ""
         digits_only = re.sub(r"\D", "", raw_phone)
         if digits_only.startswith("1") and len(digits_only) == 11:
             digits_only = digits_only[1:]
