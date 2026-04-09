@@ -1721,7 +1721,7 @@ async def media_stream(websocket: WebSocket):
                     kb_block = ""
                     try:
                         OPENAI_KEY_HTTP = os.environ.get("OPENAI_API_KEY", "")
-                        if OPENAI_KEY_HTTP and biz_id:
+                        if OPENAI_KEY_HTTP and business_id:
                             # Embed a representative query from the greeting context
                             seed_text = f"Questions about {biz_name} services, pricing, hours, booking, contact"
                             emb_res = httpx.post(
@@ -1733,20 +1733,25 @@ async def media_stream(websocket: WebSocket):
                             if emb_res.status_code == 200:
                                 vec = emb_res.json()["data"][0]["embedding"]
                                 # Vector similarity search — top 3 chunks, allow_on_voice=true
-                                kb_rows = sb.rpc("match_knowledge", {
-                                    "query_embedding": vec,
-                                    "match_count":     3,
-                                    "business_id_filter": biz_id,
+                                # Use match_knowledge_chunks (same function aria_agent.py uses).
+                                # Previous code called match_knowledge which is an older/broken
+                                # Supabase function that surfaced "name 'biz_id' is not defined"
+                                # as a non-fatal warning on every call.
+                                kb_rows = sb.rpc("match_knowledge_chunks", {
+                                    "query_embedding":   vec,
+                                    "match_business_id": business_id,
+                                    "match_threshold":   0.7,
+                                    "match_count":       3,
                                 }).execute()
                                 if kb_rows.data:
-                                    chunks = [r["raw_content"] for r in kb_rows.data if r.get("raw_content")]
+                                    chunks = [r["content"] for r in kb_rows.data if r.get("content")]
                                     if chunks:
                                         kb_block = (
                                             "\n━━━ KNOWLEDGE BASE ━━━\n"
                                             + "\n---\n".join(chunks)
                                             + "\n━━━ END KNOWLEDGE BASE ━━━"
                                         )
-                                        logger.info(f"KB RAG: injected {len(chunks)} chunks for {biz_id}")
+                                        logger.info(f"KB RAG: injected {len(chunks)} chunks for {business_id}")
                     except Exception as kb_err:
                         logger.warning(f"KB RAG failed (non-fatal): {kb_err}")
 
