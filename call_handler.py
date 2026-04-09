@@ -1746,34 +1746,50 @@ async def media_stream(websocket: WebSocket):
                         caller_last4=caller_last4 or "????",
                     ) + memory_block + services_block + kb_block
 
-                    # ── Session config with tuned VAD + barge-in ──────────
-                    # GA interface (April 2026): session.type is now REQUIRED.
-                    # Beta shape without it will be rejected. The other fields
-                    # (input_audio_format, voice, instructions, etc.) are kept
-                    # flat — the GA interface accepts the legacy flat shape as
-                    # of April 2026, but may require nesting under session.audio
-                    # in a future deprecation. See:
-                    # https://developers.openai.com/api/docs/guides/realtime
+                    # ── Session config — GA nested shape (April 2026) ─────
+                    # Second migration fix after Hotfix #1: the GA interface
+                    # rejects the flat beta shape with:
+                    #   "Unknown parameter: 'session.turn_detection'"
+                    # Everything audio-related must now live under session.audio
+                    # with input/output sub-objects. See canonical shape at:
+                    # https://platform.openai.com/docs/guides/realtime-conversations
+                    #
+                    # Key translations from beta → GA:
+                    #   turn_detection        → audio.input.turn_detection
+                    #   input_audio_format    → audio.input.format  (object, not string)
+                    #   output_audio_format   → audio.output.format (object, not string)
+                    #   input_audio_transcription → audio.input.transcription
+                    #   voice                 → audio.output.voice
+                    #   modalities: [t,a]     → output_modalities: [a] (Twilio = audio only)
+                    #   g711_ulaw             → {"type": "audio/pcmu"} (μ-law, 8kHz implicit)
+                    #   temperature: 0.7      → REMOVED (not in GA session-level examples;
+                    #                          can be re-added to response.create if needed)
                     await openai_ws.send(json.dumps({
                         "type": "session.update",
                         "session": {
                             "type": "realtime",
-                            "turn_detection": {
-                                "type":                "server_vad",
-                                "threshold":           0.6,    # less sensitive = fewer false triggers
-                                "prefix_padding_ms":   200,
-                                "silence_duration_ms": 800,    # respond after 800ms silence
-                                # Barge-in: when caller speaks, Aria stops immediately
-                                "create_response":     True,
-                                "interrupt_response":  True,   # KEY: enables true barge-in
-                            },
-                            "input_audio_format":  "g711_ulaw",
-                            "output_audio_format": "g711_ulaw",
-                            "input_audio_transcription": {"model": "whisper-1"},
-                            "voice":        voice,
+                            "output_modalities": ["audio"],
                             "instructions": system_prompt,
-                            "modalities":   ["text", "audio"],
-                            "temperature":  0.7,
+                            "audio": {
+                                "input": {
+                                    # audio/pcmu = g711 μ-law 8kHz (Twilio Media Streams native format)
+                                    "format": {"type": "audio/pcmu"},
+                                    "transcription": {"model": "whisper-1"},
+                                    "turn_detection": {
+                                        "type":                "server_vad",
+                                        "threshold":           0.6,    # less sensitive = fewer false triggers
+                                        "prefix_padding_ms":   200,
+                                        "silence_duration_ms": 800,    # respond after 800ms silence
+                                        # Barge-in: when caller speaks, Aria stops immediately
+                                        "create_response":     True,
+                                        "interrupt_response":  True,   # KEY: enables true barge-in
+                                    },
+                                },
+                                "output": {
+                                    "format": {"type": "audio/pcmu"},
+                                    "voice":  voice,
+                                },
+                            },
                             "tools": [
                                 {
                                     "type": "function",
