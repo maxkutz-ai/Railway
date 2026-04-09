@@ -1916,7 +1916,13 @@ async def media_stream(websocket: WebSocket):
                 data       = json.loads(raw)
                 event_type = data.get("type", "")
 
-                if event_type == "response.audio.delta" and data.get("delta"):
+                # Audio delta event — beta was `response.audio.delta`, GA is
+                # `response.output_audio.delta`. Per OpenAI's migration guide
+                # the rename is complete, but as of January 2026 some users
+                # still observed gpt-realtime emitting the beta name (see
+                # community.openai.com/t/.../1360707). Accepting both is
+                # forward- and backward-compatible at zero risk.
+                if event_type in ("response.audio.delta", "response.output_audio.delta") and data.get("delta"):
                     is_responding = True
                     if not current_item_id:
                         current_item_id = data.get("item_id")
@@ -1933,7 +1939,7 @@ async def media_stream(websocket: WebSocket):
                     except Exception:
                         pass  # Twilio disconnected
 
-                elif event_type == "response.audio_transcript.done":
+                elif event_type in ("response.audio_transcript.done", "response.output_audio_transcript.done"):
                     # Aria finished speaking — store her full transcript turn
                     # Skip if this fires within 1s of a cancel (ghost transcript from cancelled response)
                     import time as _time
