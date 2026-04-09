@@ -1395,6 +1395,14 @@ async def media_stream(websocket: WebSocket):
     last_speech_at      = None   # timestamp of last caller speech — for silence timeout
     current_item_id     = None   # OpenAI assistant message ID (for truncation on barge-in)
     audio_ms_sent       = 0      # Milliseconds of audio sent to Twilio (for accurate truncation)
+    # Function call output queue. Function calls arrive mid-response via
+    # `response.function_call_arguments.done` events; if we send the
+    # function output + a new `response.create` immediately, OpenAI
+    # rejects with `conversation_already_has_active_response` because the
+    # original response that emitted the function call is still
+    # technically active until `response.done` arrives. We queue the
+    # outputs here and drain them in the response.done handler.
+    pending_function_outputs: list = []
 
     openai_ws = None
 
@@ -1983,8 +1991,17 @@ async def media_stream(websocket: WebSocket):
                         if _re_pci.search(card_pattern, text):
                             text = _re_pci.sub(r'\1 **** **** ****', card_pattern, text)
                             logger.warning(f"PCI: card number detected and scrubbed in call {call_sid}")
-                            # Interrupt Aria and trigger secure payment flow
+                            # Interrupt Aria and trigger secure payment flow.
+                            # If a response is currently in progress, cancel
+                            # it FIRST so the interrupt response.create doesn't
+                            # collide with conversation_already_has_active_response.
                             try:
+                                if is_responding:
+                                    try:
+                                        await openai_ws.send(json.dumps({"type": "response.cancel"}))
+                                    except Exception:
+                                        pass
+                                    is_responding = False
                                 await openai_ws.send(json.dumps({
                                     "type": "conversation.item.create",
                                     "item": {"type": "message", "role": "user", "content": [{
@@ -2009,7 +2026,7 @@ async def media_stream(websocket: WebSocket):
                         last_speech_at = datetime.now(timezone.utc)
 
                 elif event_type == "response.function_call_arguments.done":
-                    # Aria wants to call a tool — handle it
+                    # Aria wants to call a tool — handle it (side effects run now)
                     fn_name = data.get("name", "")
                     fn_args_raw = data.get("arguments", "{}")
                     call_item_id = data.get("call_id", "")
@@ -2020,16 +2037,39 @@ async def media_stream(websocket: WebSocket):
                         fn_args = {}
                     logger.info(f"Function call: {fn_name}({fn_args})")
                     result_text = await handle_function_call(fn_name, fn_args, business_id, to_number, call_sid=call_sid)
-                    # Feed result back to OpenAI so Aria can speak it
-                    await openai_ws.send(_json.dumps({
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type":    "function_call_output",
-                            "call_id": call_item_id,
-                            "output":  result_text,
-                        }
-                    }))
-                    await openai_ws.send(_json.dumps({"type": "response.create"}))
+                    # DEFERRED: queue the function output and the response.create
+                    # for after `response.done`. Sending them now triggers
+                    # `conversation_already_has_active_response` because the
+                    # response that emitted this function call is technically
+                    # still active until response.done arrives. The
+                    # `response.done` handler below drains this queue.
+                    pending_function_outputs.append((call_item_id, result_text))
+
+                elif event_type in ("response.done", "response.completed"):
+                    # Canonical end-of-response event. Mark not responding,
+                    # then drain any pending function outputs queued during
+                    # this response so the deferred response.create lands
+                    # AFTER the active response is finished.
+                    is_responding = False
+                    if pending_function_outputs:
+                        import json as _json
+                        for call_item_id, result_text in pending_function_outputs:
+                            try:
+                                await openai_ws.send(_json.dumps({
+                                    "type": "conversation.item.create",
+                                    "item": {
+                                        "type":    "function_call_output",
+                                        "call_id": call_item_id,
+                                        "output":  result_text,
+                                    }
+                                }))
+                            except Exception as _err:
+                                logger.error(f"Failed to send function output: {_err}")
+                        pending_function_outputs.clear()
+                        try:
+                            await openai_ws.send(_json.dumps({"type": "response.create"}))
+                        except Exception as _err:
+                            logger.error(f"Failed to trigger continuation response: {_err}")
 
                 elif event_type == "input_audio_buffer.speech_started":
                     # Two-step interruption handshake:
