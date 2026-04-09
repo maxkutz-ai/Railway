@@ -1553,15 +1553,15 @@ async def media_stream(websocket: WebSocket):
                             "of the recording announcement. Start the call naturally."
                         )
 
-                    # ── Dynamic Medical Vertical Prompting ───────────────────────
-                    biz_info         = business_cfg.get("businesses") or {}
-                    is_medical       = biz_info.get("is_medical_vertical", False)
+                    # ── Industry Vertical (home services vs general) ─────────────
+                    # Phase Contacts-1: medical vertical code path removed.
+                    # Product scope no longer targets HIPAA-regulated verticals;
+                    # the MEDICAL VERTICAL COMPLIANCE RULES block that used to
+                    # inject into Aria's system prompt has been retired. If/when
+                    # medical support returns, restore from git history.
                     industry_vert    = settings.get("industry_vertical", "general")
-                    # Also check vertical from settings_business
-                    if industry_vert in ("medical", "dental", "veterinary", "medspa"):
-                        is_medical = True
 
-                    # ── 3-Way Industry Vertical Fork ─────────────────────────────────────
+                    # ── 2-Way Industry Vertical Fork ─────────────────────────────────────
                     # Fetch safety settings
                     emerg_email = settings.get("emergency_contact_email", "") or ""
                     emerg_phone = settings.get("emergency_contact_phone", "") or ""
@@ -1572,37 +1572,7 @@ async def media_stream(websocket: WebSocket):
                         "roofing", "trades", "contractor", "home_services_trades"
                     )
 
-                    if is_medical:
-                        compliance_rule += (
-                            "\n\nMEDICAL VERTICAL COMPLIANCE RULES (MANDATORY):\n"
-                            "1. EMERGENCY ROUTING: If a caller mentions chest pain, difficulty breathing, "
-                            "severe bleeding, stroke symptoms, or any life-threatening emergency, "
-                            "IMMEDIATELY say: 'This sounds like a medical emergency. Please hang up and "
-                            "call 911 right now.' Do not attempt to book or continue the call.\n"
-                            "2. NEW PATIENT SECURE HOLD: For NEW patients booking medical/aesthetic "
-                            "appointments, do NOT confirm a final booking. Instead say: 'I have "
-                            "tentatively held that slot for you! Because this is a medical appointment, "
-                            "our system requires a quick intake form to finalize the booking. I just "
-                            "texted you the secure link. If you complete it within 30 minutes, it will "
-                            "permanently lock in your time. Otherwise the system will automatically "
-                            "release the hold.' Then trigger the intake SMS.\n"
-                            "3. EXISTING PATIENTS: If the caller is already in the system, you may "
-                            "book directly using the Soft Confirm method.\n"
-                            "4. MINOR PROTECTION: If a caller is or sounds under 18, do NOT book "
-                            "restricted medical/aesthetic services. Ask a parent or guardian to call.\n"
-                            "5. NO MEDICAL ADVICE: Never provide diagnoses or treatment recommendations. "
-                            "Always say 'I am not able to give medical advice — please speak with your provider.'\n"
-                            "5b. PHI OVERSHARER: If caller lists medications, insurance IDs, or medical history, interrupt: To protect your privacy, please save those details for the secure form — I just need your name and phone number. Never allow PHI to be spoken aloud.\\n"
-                            "5c. ANTI-TECH FALLBACK: If caller cannot use texts, say: I completely understand — a human specialist will call you back shortly. Then flag the call as REQUIRES_HUMAN_CALLBACK.\\n"
-                            "6. MVD RULE (MEDICAL): You only need THREE things — First Name, Cell Phone, "
-                            "and reason for call. NEVER ask for home address, email, DOB, insurance, or "
-                            "medical history over the phone. Once you have all three, say exactly: "
-                            "'To save you from spelling everything out, I am texting you our secure "
-                            "registration link right now — it takes about 60 seconds on your phone.' "
-                            "Then immediately trigger the SMS intake link.\n"
-                        )
-
-                    elif is_home_services:
+                    if is_home_services:
                         compliance_rule += (
                             "\n\nHOME SERVICES & TRADES PROTOCOL (MANDATORY):\n"
                             "PHYSICAL EMERGENCY PROTOCOL: If caller reports gas smell, sparking panels, active flooding, or life-threatening hazards, immediately say: Please evacuate and call 911 or your local utility company. I am flagging this as a CRITICAL emergency for our dispatch team. Then stop the booking flow.\\n"
