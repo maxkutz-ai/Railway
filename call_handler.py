@@ -683,21 +683,30 @@ async def extract_lead_from_transcript(
         if extracted.get("email"):
             contact_row["email"] = extracted["email"]
 
-        # UPSERT — match on (business_id, phone_normalized)
-        # The contacts table has a pre-existing unique constraint
-        # `uniq_contacts_business_phone` on (business_id, phone_normalized)
-        # that predates the phone_hash column. We must ON CONFLICT against
-        # that constraint, otherwise legacy contacts (created before
-        # phone_hash existed, with phone_hash IS NULL) will trigger a 23505
-        # duplicate-key error: PostgreSQL skips the phone_hash conflict
-        # check (NULL vs non-NULL doesn't conflict in unique indexes), falls
-        # through to INSERT, then violates uniq_contacts_business_phone.
-        # Migration 015's contacts_business_id_phone_hash_unique stays as
-        # defense-in-depth and will still catch any phone_hash collisions.
-        # Observed 2026-04-09 on call CA9e3d07868796eea830de8b826942b26e.
+        # UPSERT — match on (business_id, phone_hash)
+        # Targets `contacts_business_id_phone_hash_unique` (migration 015),
+        # which is a FULL non-partial unique index — the only kind PostgREST
+        # can use as an ON CONFLICT target via the URL parameter.
+        #
+        # The other unique index on this table, `uniq_contacts_business_phone`
+        # on (business_id, phone_normalized), is partial:
+        #     WHERE phone_normalized IS NOT NULL
+        # PostgREST refuses partial indexes for ON CONFLICT (no way to
+        # express the WHERE predicate in ?on_conflict=col1,col2), so we
+        # cannot target it from this code path. It still enforces uniqueness
+        # at the storage layer as a safety net.
+        #
+        # PRECONDITION: every contact row in this table must have a non-null
+        # phone_hash. Legacy rows created before the phone_hash column existed
+        # will collide on the partial phone_normalized index when this upsert
+        # falls through to INSERT (NULL phone_hash doesn't conflict with the
+        # new row's non-NULL hash, so PostgreSQL skips the UPDATE branch and
+        # tries INSERT, which then violates uniq_contacts_business_phone).
+        # The migration that backfills phone_hash on legacy rows must run
+        # before this code path will succeed cleanly for those numbers.
         upsert_result = sb.table("contacts").upsert(
             contact_row,
-            on_conflict="business_id,phone_normalized",
+            on_conflict="business_id,phone_hash",
         ).execute()
         if not (upsert_result.data and upsert_result.data[0].get("id")):
             id_result = sb.table("contacts").select("id").eq(
