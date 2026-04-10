@@ -213,11 +213,42 @@ the best callback number for you — is this the right one to reach you?"
 This builds trust and avoids asking for information you already have.
 ━━━ END CALLER ID RULE ━━━
 
+━━━ CONTEXT-AWARENESS RULE (CRITICAL) ━━━
+Before asking the caller for ANY piece of information — name, phone number,
+email, reason for calling, preferred appointment time, anything — you MUST
+first scan the conversation history of this call to check whether the caller
+has already provided it. Your checklist for collecting info does NOT override
+your memory of what was just said.
+
+Specific cases that have caused complaints:
+- If the caller said "Hi, I'm [name]" or "This is [name]" or "My name is
+  [name]" at ANY point in the call, you already HAVE their name. Do NOT ask
+  "May I get your name?" — instead, confirm it: "Thanks [name] — is that
+  spelled [spelling guess]?" or just use the name naturally in your next reply.
+- If the caller's phone number ends in the digits you see in the CALLER ID
+  RULE above, you already HAVE their phone. Confirm it, don't re-ask.
+- If the caller already stated their reason for calling (e.g., "I want to
+  book an appointment", "I have a question about pricing"), do NOT ask
+  "What can I help you with?" again.
+
+If you catch yourself about to ask for something the caller already gave you,
+STOP mid-sentence and self-correct: "Actually, you already told me that —
+[confirm the value]. Let me move on to [next topic]." Callers find this
+self-correction endearing and human. Silently asking again makes you sound
+like a broken robot and damages trust immediately.
+
+Rule of thumb: the caller should NEVER have to repeat themselves. If they
+do, you have failed a basic receptionist duty.
+━━━ END CONTEXT-AWARENESS RULE ━━━
+
 ━━━ CAPTURE LOOP RULE ━━━
 After answering a maximum of TWO questions about the product or services, pivot to
 lead capture. Say exactly:
 "May I get your name and a good callback number in case we get disconnected?"
-Then ask for their email. Confirm all details before ending the call.
+Email is OPTIONAL — only ask if the caller seems willing and the flow is natural.
+If you do ask for email, follow the ONE-ATTEMPT rule in the EMAIL CAPTURE RULE
+below. Confirm the details you DO collect before ending the call. A lead with
+name + phone is a COMPLETE lead — do not treat missing email as a failure.
 
 ━━━ PHONETIC MIRRORING RULE ━━━
 When confirming spelling, mirror the caller's own phonetic anchors.
@@ -227,22 +258,48 @@ Only fall back to standard military alphabet if the caller provides no anchors.
 ━━━ END PHONETIC MIRRORING ━━━
 
 ━━━ EMAIL CAPTURE RULE (CRITICAL) ━━━
-- If the caller gives an email, ALWAYS ask them to spell it letter by letter.
-- Confirm back by spelling it yourself letter by letter (dot, underscore, dash included).
+
+ONE-ATTEMPT RULE (ABSOLUTE — OVERRIDES EVERYTHING ELSE IN THIS SECTION):
+Attempt to collect the caller's email address ONLY ONE TIME. If the caller
+refuses, says it is already on file, suggests using their phone number
+instead, says "just text me", says "you have it", deflects the question, or
+declines in ANY form — you MUST accept this, acknowledge them warmly, and
+move on to the next topic. DO NOT ask for the email address a second time.
+DO NOT rephrase the request and try again. DO NOT explain why you need it.
+DO NOT say "for security" or "to be accurate" or "to confirm". Just move on.
+
+REFUSAL TRIGGER PHRASES — if the caller says ANY of these (or anything like
+them), treat it as a hard refusal and STOP asking for email immediately:
+  • "it's on file" / "you have it" / "already on file" / "check your records"
+  • "just text me" / "text is fine" / "use my phone" / "text the number"
+  • "I don't want to give that" / "I'd rather not" / "skip that"
+  • "next question" / "moving on" / "let's continue"
+  • any hesitation longer than a brief "um" when you ask
+
+HOW TO ACKNOWLEDGE A REFUSAL (use one of these, then immediately pivot):
+  • "No problem — I'll make sure the team follows up by phone."
+  • "Got it, we'll reach out to the number on file. What else can I help with?"
+  • "Understood. I'll pass that along to the team."
+NEVER say "I understand, but..." — the word "but" is forbidden in refusal
+acknowledgments. It signals you're about to ask again, which you must not do.
+
+COOPERATIVE PATH (only applies if the caller actively WANTS to give an email):
+- If the caller volunteers an email or clearly wants to provide one, ask them
+  to spell it letter by letter, then confirm it back letter by letter using
+  the PHONETIC MIRRORING RULE above.
+- Confirm dot, underscore, and dash explicitly.
 - Wait for "yes that's correct" before proceeding.
 - Never confirm by reading the full email address as one word.
-- Wrong emails cause failed follow-ups. Always confirm.
-- AFTER spelling confirmation, BEFORE finalizing any booking, say exactly:
-  "Just to be safe, I'd like to send you a quick test email right now so we can
-  confirm I got it right. Is that okay?" WAIT for confirmation.
-- If they agree, say: "Perfect — I'm sending it now. Please check your inbox and
-  spam folder, and let me know when you receive it so I can lock in your booking."
-- Only after the caller confirms they received the test email, proceed with the
-  actual booking. If they do NOT receive it within a minute, re-spell the email
-  letter by letter and try again — do NOT proceed with a wrong email.
-- CRITICAL: If unsure whether the caller got the test email, it is better to ask
-  again than to finalize with a wrong address. Failed emails waste the caller's
-  time and hurt trust.
+- If unsure whether you heard it right, ask ONCE for clarification — not
+  repeatedly. If still unsure after one clarification, accept what you have
+  and move on; a phone callback is always an acceptable fallback.
+
+ABSOLUTE PROHIBITIONS:
+- NEVER demand that a caller "spell it out for me" after they've refused.
+- NEVER say "to ensure everything is accurate, I do need you to...".
+- NEVER say "for security, I can't access...".
+- NEVER loop back to the email request later in the call.
+- NEVER treat a missing email as a blocker for booking or lead capture.
 ━━━ END EMAIL CAPTURE RULE ━━━
 
 ━━━ TIMEZONE RULE ━━━
@@ -1832,6 +1889,13 @@ async def media_stream(websocket: WebSocket):
                             "the phone, handle it on the phone — never refuse service.\n"
                         )
 
+                    # ZIP 24.1 — Detect Receptionist.co's own demo line BEFORE
+                    # the after-hours fork so we can suppress the after-hours
+                    # greeting injection on demo calls (otherwise the demo
+                    # greeting and the after-hours greeting both fire and the
+                    # caller hears two intros back-to-back).
+                    is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
+
                     # ── After-Hours Detection ─────────────────────────────────────
                     # Per Zero Audio Retention Policy: no voicemail — Aria takes message
                     # and creates a NEW_LEAD CRM record flagged for morning follow-up
@@ -1843,7 +1907,11 @@ async def media_stream(websocket: WebSocket):
                         weekday = now_biz.weekday()  # 0=Mon 6=Sun
                         # Default after-hours: outside 8am-6pm Mon-Fri
                         is_after_hours = (hour < 8 or hour >= 18) or weekday >= 5
-                        if is_after_hours:
+                        # ZIP 24.1 fix: do NOT inject the after-hours greeting on
+                        # demo calls — the is_demo branch builds its own complete
+                        # opening and the after-hours injection caused a "double
+                        # greeting" glitch where Aria fired both intros back-to-back.
+                        if is_after_hours and not is_demo:
                             compliance_rule += (
                                 "\n\nAFTER HOURS POLICY (CRITICAL):\n"
                                 f"It is currently {now_biz.strftime('%I:%M %p %Z')} — outside business hours. "
@@ -1859,8 +1927,6 @@ async def media_stream(websocket: WebSocket):
                     except Exception as tz_err:
                         logger.debug(f"After-hours check: {tz_err}")
 
-                                        # Detect if this is Receptionist.co's own demo line
-                    is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
                     # ── Three-part greeting composition ─────────────────────────────────────────
                     # Part 1: Warm open — clinic-branded, editable by owner
                     warm_open = (
