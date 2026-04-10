@@ -1506,8 +1506,23 @@ async def run_aup_moderation(
 
 
 async def save_call_record(call_sid: str, business_id: str, from_number: str,
-                            transcript: str, duration: int, start_time_iso: str = None):
-    """Save completed call to Supabase."""
+                            transcript: str, duration: int, start_time_iso: str = None,
+                            transcript_turns: list = None):
+    """
+    Save completed call to Supabase.
+
+    ZIP 25.0 — Added transcript_turns kwarg. The structured per-turn array is
+    JSON-serialized and AES-256 encrypted with the same key as transcript_summary,
+    then written to calls.transcript_turns (TEXT). The CRM fetches it via
+    /api/calls/[twilioCallSid]/transcript which decrypts server-side and returns
+    parsed JSON. This fixes the "transcript display = ciphertext" bug and gives
+    the compliance dashboard a permanent structured record (was previously lost
+    when active_calls row was deleted at call end).
+
+    Cap on transcript_turns is 500 entries (raised from 40 in same ZIP) — covers
+    even ~30 minute calls without truncation. HIPAA parity: encryption applies
+    to BOTH columns when ENCRYPTION_KEY is set.
+    """
     sb = get_sb()
     if not sb or not business_id:
         return
@@ -1521,7 +1536,31 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             else clean_transcript[:8000]
         )
 
-        sb.from_("calls").upsert({
+        # ZIP 25.0 — Encrypt structured turns the same way. We scrub PII out of
+        # each turn's text field before serializing, then encrypt the whole JSON
+        # blob. The CRM API route decrypts and parses on read.
+        stored_turns = None
+        if transcript_turns:
+            try:
+                scrubbed_turns = [
+                    {
+                        "role": str(t.get("role", "")),
+                        "text": scrub_pii(str(t.get("text", ""))),
+                        "ts":   str(t.get("ts", "")),
+                    }
+                    for t in transcript_turns
+                    if isinstance(t, dict)
+                ]
+                turns_json = json.dumps(scrubbed_turns, ensure_ascii=False)
+                stored_turns = (
+                    encrypt_text(turns_json) if should_encrypt()
+                    else turns_json
+                )
+            except Exception as turns_err:
+                logger.warning(f"transcript_turns serialize failed (non-critical): {turns_err}")
+                stored_turns = None
+
+        row = {
             "twilio_call_sid":  call_sid,
             "business_id":      business_id,
             "phone_number":     encrypt_pii(from_number),
@@ -1533,7 +1572,11 @@ async def save_call_record(call_sid: str, business_id: str, from_number: str,
             "call_status":      "completed",
             "started_at":       start_time_iso or datetime.now(timezone.utc).isoformat(),
             "transcript_summary": stored_transcript,
-        }, on_conflict="twilio_call_sid").execute()
+        }
+        if stored_turns is not None:
+            row["transcript_turns"] = stored_turns
+
+        sb.from_("calls").upsert(row, on_conflict="twilio_call_sid").execute()
 
         # Post-call async tasks
         try:
@@ -2271,7 +2314,7 @@ async def media_stream(websocket: WebSocket):
                         transcript.append(f"Aria: {text}")
                         _now = datetime.now(timezone.utc).isoformat()
                         transcript_turns.append({"role":"ai","text":text,"ts":_now})
-                        if len(transcript_turns) > 40: transcript_turns.pop(0)
+                        if len(transcript_turns) > 500: transcript_turns.pop(0)  # ZIP 25.0 — was 40, raised so save_call_record gets full history
                         # Push live transcript so Glass Box shows Aria's turns
                         if business_id:
                             turns = transcript_turns[-20:]
@@ -2314,7 +2357,7 @@ async def media_stream(websocket: WebSocket):
                         transcript.append(f"Caller: {text}")
                         _now2 = datetime.now(timezone.utc).isoformat()
                         transcript_turns.append({"role":"user","text":text,"ts":_now2})
-                        if len(transcript_turns) > 40: transcript_turns.pop(0)
+                        if len(transcript_turns) > 500: transcript_turns.pop(0)  # ZIP 25.0 — was 40, raised so save_call_record gets full history
                         # Push caller speech immediately so Glass Box shows it live
                         if business_id:
                             _turns = transcript_turns[-20:]
@@ -2492,7 +2535,7 @@ async def media_stream(websocket: WebSocket):
             turn_count      = len(transcript)
             logger.info(f"Saving call: {call_sid} | {turn_count} turns | {len(full_transcript)} chars | {duration}s")
             try:
-                await save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None)
+                await save_call_record(call_sid, business_id, from_number, full_transcript, duration, start_time.isoformat() if start_time else None, transcript_turns=transcript_turns)
                 logger.info(f"Call saved: {call_sid}")
                 # Async AUP moderation — non-blocking, runs after save
                 asyncio.create_task(run_aup_moderation(
