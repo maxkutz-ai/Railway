@@ -1277,6 +1277,7 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
 
         # Resolve contact_id from from_number for audit precision
         contact_id = None
+        biz_name_for_disclosure = "our business"
         try:
             sb = get_sb()
             if sb and from_number:
@@ -1285,8 +1286,33 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                 lookup = sb.table("contacts").select("id").eq("business_id", business_id).eq("phone_normalized", phone_norm).limit(1).execute()
                 if lookup.data:
                     contact_id = lookup.data[0].get("id")
+            # ZIP 24.1.1 — also fetch business name for the rendered disclosure text below
+            if sb and business_id:
+                biz_lookup = sb.from_("businesses").select("name").eq("id", business_id).maybe_single().execute()
+                if biz_lookup.data and biz_lookup.data.get("name"):
+                    biz_name_for_disclosure = biz_lookup.data["name"]
         except Exception as lookup_err:
             logger.debug(f"log_sms_consent contact lookup: {lookup_err}")
+
+        # ZIP 24.1.1 — Render the canonical disclosure template with the
+        # ACTUAL business name and a humanized scope ("booking_link" →
+        # "booking link") so the audit trail stores the verbatim text the
+        # caller actually heard, NOT the template with placeholders. This
+        # is the bulletproof TCPA defense posture: a plaintiff cannot argue
+        # we're reconstructing the disclosure after the fact, because the
+        # exact rendered string is pinned at the moment of consent.
+        try:
+            scope_human = scope.replace("_", " ")
+            disclosure_rendered = (
+                "Before I text you, I just need to let you know — by giving me your "
+                f"mobile number, you're agreeing to receive a text from {biz_name_for_disclosure} "
+                f"with your {scope_human}. Standard message and data rates may apply. You can "
+                "reply STOP at any time to opt out, or HELP for support. Our full SMS "
+                "terms are at receptionist.co/legal/sms-terms. Is that okay?"
+            )
+        except Exception as render_err:
+            logger.debug(f"log_sms_consent disclosure render: {render_err}")
+            disclosure_rendered = None  # CRM falls back to its own default template
 
         # POST to CRM /api/sms/log-consent with shared-secret auth
         try:
@@ -1305,6 +1331,9 @@ async def handle_function_call(fn_name: str, fn_args: dict, business_id: str, to
                 "call_sid":             call_sid or None,
                 "consent_method":       "voice",
             }
+            # ZIP 24.1.1 — pin the rendered disclosure (not the template)
+            if disclosure_rendered:
+                payload["disclosure_text"] = disclosure_rendered
 
             async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
