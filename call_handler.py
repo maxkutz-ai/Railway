@@ -818,6 +818,76 @@ async def extract_lead_from_transcript(
         if not sb:
             return
 
+        # ── ZIP 28: Pre-check for existing contact (primary OR alternate phone) ──
+        # Before the upsert, check if this caller's phone matches an existing
+        # contact via either:
+        #   (a) the primary phone_hash key (normal path), OR
+        #   (b) the alternate_phone_normalized column (ZIP 27.10 multi-phone)
+        #
+        # We need to know this BEFORE the upsert for two reasons:
+        #   1. Name mismatch detection — if the existing contact already has
+        #      a first_name that differs from what Aria captured, we must NOT
+        #      overwrite it. Instead we log the captured name to
+        #      calls.name_mismatch_caller and the CRM shows a warning banner.
+        #   2. Alternate phone routing — if the match is via alternate_phone,
+        #      we must do an UPDATE (not the phone_hash-keyed UPSERT) since
+        #      the upsert would create a NEW contact (the inbound caller's
+        #      phone_hash differs from the existing contact's primary phone_hash).
+        phone_hash_val = hash_pii(phone_clean)
+        existing_contact = None
+        matched_via = "new"
+
+        try:
+            primary_match = sb.table("contacts").select(
+                "id, first_name, last_name"
+            ).eq("business_id", business_id).eq("phone_hash", phone_hash_val).limit(1).execute()
+            if primary_match.data:
+                existing_contact = primary_match.data[0]
+                matched_via = "primary"
+        except Exception as e:
+            logger.debug(f"ZIP 28 primary phone lookup non-fatal error: {e}")
+
+        if not existing_contact:
+            try:
+                alt_match = sb.table("contacts").select(
+                    "id, first_name, last_name"
+                ).eq("business_id", business_id).eq(
+                    "alternate_phone_normalized", phone_normalized_e164
+                ).limit(1).execute()
+                if alt_match.data:
+                    existing_contact = alt_match.data[0]
+                    matched_via = "alternate"
+                    logger.info(
+                        f"ZIP 28: Caller matched via alternate_phone for contact "
+                        f"{existing_contact['id']} (primary phone differs)"
+                    )
+            except Exception as e:
+                logger.debug(f"ZIP 28 alternate phone lookup non-fatal error: {e}")
+
+        # ── ZIP 28: Detect name mismatch ─────────────────────────────────────
+        # If the existing contact already has a different first_name, log the
+        # captured caller name to calls.name_mismatch_caller and exclude it
+        # from the upsert payload so we don't overwrite the contact's name.
+        captured_first = (extracted.get("first_name") or "").strip()
+        captured_last  = (extracted.get("last_name") or "").strip()
+        name_mismatch  = False
+
+        if existing_contact and captured_first:
+            existing_first = (existing_contact.get("first_name") or "").strip()
+            if existing_first and existing_first.lower() != captured_first.lower():
+                name_mismatch = True
+                captured_full = " ".join(p for p in [captured_first, captured_last] if p)
+                try:
+                    sb.table("calls").update({
+                        "name_mismatch_caller": captured_full,
+                    }).eq("twilio_call_sid", call_sid).execute()
+                    logger.info(
+                        f"ZIP 28: Name mismatch flagged on call {call_sid} — "
+                        f"existing='{existing_first}' captured='{captured_first}'"
+                    )
+                except Exception as e:
+                    logger.warning(f"ZIP 28: Failed to log name mismatch: {e}")
+
         contact_row = {
             "business_id":      business_id,
             "phone":            encrypt_pii(phone_clean),    # AES-256 at-rest PII encryption
@@ -838,38 +908,68 @@ async def extract_lead_from_transcript(
             "updated_at":   datetime.now(timezone.utc).isoformat(),
         }
 
-        if extracted.get("first_name"):
-            contact_row["first_name"] = extracted["first_name"]
-        if extracted.get("last_name"):
-            contact_row["last_name"] = extracted["last_name"]
+        # ZIP 28: Only include captured names if NO mismatch with existing contact
+        if not name_mismatch:
+            if captured_first:
+                contact_row["first_name"] = captured_first
+            if captured_last:
+                contact_row["last_name"] = captured_last
         if extracted.get("email"):
             contact_row["email"] = extracted["email"]
 
-        # UPSERT — match on (business_id, phone_hash)
-        # Targets `contacts_business_id_phone_hash_unique` (migration 015),
-        # which is a FULL non-partial unique index — the only kind PostgREST
-        # can use as an ON CONFLICT target via the URL parameter.
-        #
-        # The other unique index on this table, `uniq_contacts_business_phone`
-        # on (business_id, phone_normalized), is partial:
-        #     WHERE phone_normalized IS NOT NULL
-        # PostgREST refuses partial indexes for ON CONFLICT (no way to
-        # express the WHERE predicate in ?on_conflict=col1,col2), so we
-        # cannot target it from this code path. It still enforces uniqueness
-        # at the storage layer as a safety net.
-        #
-        # PRECONDITION: every contact row in this table must have a non-null
-        # phone_hash. Legacy rows created before the phone_hash column existed
-        # will collide on the partial phone_normalized index when this upsert
-        # falls through to INSERT (NULL phone_hash doesn't conflict with the
-        # new row's non-NULL hash, so PostgreSQL skips the UPDATE branch and
-        # tries INSERT, which then violates uniq_contacts_business_phone).
-        # The migration that backfills phone_hash on legacy rows must run
-        # before this code path will succeed cleanly for those numbers.
-        upsert_result = sb.table("contacts").upsert(
-            contact_row,
-            on_conflict="business_id,phone_hash",
-        ).execute()
+        # ── ZIP 28: Route to UPDATE for alternate-phone matches ──────────────
+        # When matched via alternate_phone, the phone_hash-keyed UPSERT below
+        # would create a NEW contact (different phone_hash). Instead, do an
+        # UPDATE on the existing contact's id, stripping fields that would
+        # overwrite their primary phone identity.
+        if matched_via == "alternate":
+            update_payload = {
+                k: v for k, v in contact_row.items()
+                if k not in ("phone", "phone_hash", "phone_normalized",
+                             "business_id", "channel", "source", "lead_status",
+                             "pipeline_status")
+            }
+            try:
+                sb.table("contacts").update(update_payload).eq(
+                    "id", existing_contact["id"]
+                ).execute()
+                upsert_result = type("R", (), {"data": [{"id": existing_contact["id"]}]})()
+                logger.info(
+                    f"ZIP 28: Updated existing contact {existing_contact['id']} via alternate phone path"
+                )
+            except Exception as e:
+                logger.error(f"ZIP 28: alternate-phone UPDATE failed, falling back to upsert: {e}")
+                # Fall through to upsert as safety net
+                upsert_result = sb.table("contacts").upsert(
+                    contact_row,
+                    on_conflict="business_id,phone_hash",
+                ).execute()
+        else:
+            # UPSERT — match on (business_id, phone_hash)
+            # Targets `contacts_business_id_phone_hash_unique` (migration 015),
+            # which is a FULL non-partial unique index — the only kind PostgREST
+            # can use as an ON CONFLICT target via the URL parameter.
+            #
+            # The other unique index on this table, `uniq_contacts_business_phone`
+            # on (business_id, phone_normalized), is partial:
+            #     WHERE phone_normalized IS NOT NULL
+            # PostgREST refuses partial indexes for ON CONFLICT (no way to
+            # express the WHERE predicate in ?on_conflict=col1,col2), so we
+            # cannot target it from this code path. It still enforces uniqueness
+            # at the storage layer as a safety net.
+            #
+            # PRECONDITION: every contact row in this table must have a non-null
+            # phone_hash. Legacy rows created before the phone_hash column existed
+            # will collide on the partial phone_normalized index when this upsert
+            # falls through to INSERT (NULL phone_hash doesn't conflict with the
+            # new row's non-NULL hash, so PostgreSQL skips the UPDATE branch and
+            # tries INSERT, which then violates uniq_contacts_business_phone).
+            # The migration that backfills phone_hash on legacy rows must run
+            # before this code path will succeed cleanly for those numbers.
+            upsert_result = sb.table("contacts").upsert(
+                contact_row,
+                on_conflict="business_id,phone_hash",
+            ).execute()
         if not (upsert_result.data and upsert_result.data[0].get("id")):
             id_result = sb.table("contacts").select("id").eq(
                 "business_id", business_id
