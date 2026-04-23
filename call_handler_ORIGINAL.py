@@ -513,10 +513,10 @@ async def provision_business(request: Request):
         sb = get_sb()
         if sb:
             try:
-                sb.from_("businesses").update({
-                    "twilio_subaccount_sid":   sub_sid,
-                    "twilio_subaccount_token": sub_token,
-                }).eq("id", business_id).execute()
+                # Dropped writes to twilio_subaccount_sid +
+                # twilio_subaccount_token — columns being removed from
+                # schema. See call_handler.py (active file) for the
+                # canonical version of this flow.
                 sb.from_("settings_business").upsert({
                     "business_id":       business_id,
                     "provisioned_phone": phone_number,
