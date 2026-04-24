@@ -2871,14 +2871,10 @@ async def provision_business(request: Request):
         sb = get_sb()
         if sb:
             try:
-                # Dropped writes to businesses.twilio_subaccount_sid +
-                # businesses.twilio_subaccount_token — neither was read
-                # back by any Railway or CRM code. Columns are being
-                # dropped from the schema. The provisioned phone number
-                # is still recorded via settings_business +
-                # twilio_provisioned_numbers below, which are the values
-                # that actually matter for the provisioning flow to be
-                # complete.
+                sb.from_("businesses").update({
+                    "twilio_subaccount_sid":   sub_sid,
+                    "twilio_subaccount_token": sub_token,
+                }).eq("id", business_id).execute()
                 sb.from_("settings_business").upsert({
                     "business_id":       business_id,
                     "provisioned_phone": phone_number,

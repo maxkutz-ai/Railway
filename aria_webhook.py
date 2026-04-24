@@ -268,12 +268,10 @@ async def provision_business(request: Request):
             sb_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
             if sb_url and sb_key:
                 sb = create_client(sb_url, sb_key)
-                # Provisioning bookkeeping. We used to also write
-                # twilio_subaccount_sid + twilio_subaccount_token here,
-                # but nothing in Railway or CRM reads them back — the
-                # subaccount client is rebuilt from env vars on each
-                # request. Columns are being dropped from the schema.
+                # Store subaccount creds (encrypt in production via Supabase Vault)
                 sb.from_("businesses").update({
+                    "twilio_subaccount_sid":   sub_sid,
+                    "twilio_subaccount_token": sub_token,  # TODO: encrypt via Vault
                     "provisioned_phone":       phone_number,
                 }).eq("id", business_id).execute()
 
