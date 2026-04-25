@@ -3781,8 +3781,13 @@ ONBOARDING RULES:
             punctuate=True,
             filler_words=False,
             interim_results=True,   # stream partial results for lower latency
+            mip_opt_out=True,       # opt out of Deepgram Model Improvement Program —
+                                    # audio is deleted immediately after processing,
+                                    # never retained for model training. Required for
+                                    # our customer privacy posture per
+                                    # https://developers.deepgram.com/docs/the-deepgram-model-improvement-partnership-program
         )
-        logger.info("STT: Deepgram nova-2 (fast streaming)")
+        logger.info("STT: Deepgram nova-2 (fast streaming, mip_opt_out=true)")
     else:
         stt_engine = openai.STT(model="whisper-1", language="en")
         logger.info("STT: OpenAI Whisper (fallback — install livekit-plugins-deepgram for faster responses)")
