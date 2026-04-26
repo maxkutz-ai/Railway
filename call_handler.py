@@ -3470,7 +3470,15 @@ async def warm_handoff(req: Request):
         await openai_ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                "modalities": ["text", "audio"],
+                # GA Realtime API (April 2026): renamed `modalities` →
+                # `output_modalities`. The previous shape was the beta API
+                # field name and is now rejected with:
+                #   "Unknown parameter: 'response.modalities'"
+                # GA also no longer accepts both ["text", "audio"] together;
+                # output is single-valued. Twilio is audio-only, so ["audio"].
+                # Matches the same fix already applied at session.update
+                # (see line ~2236 above).
+                "output_modalities": ["audio"],
                 "instructions": prompt,
             }
         }))
