@@ -3814,6 +3814,7 @@ ONBOARDING RULES:
             simli_config=simli.SimliConfig(
                 api_key=SIMLI_API_KEY,
                 face_id=SIMLI_FACE_ID,
+		emotion_id="happy",
             )
         )
     except TypeError:
@@ -3821,6 +3822,7 @@ ONBOARDING RULES:
         avatar = simli.AvatarSession(
             api_key=SIMLI_API_KEY,
             face_id=SIMLI_FACE_ID,
+	    emotion_id="happy",
         )
 
     # Start session FIRST — then attach avatar
