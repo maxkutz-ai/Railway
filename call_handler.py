@@ -737,19 +737,27 @@ async def extract_lead_from_transcript(
     lead-grade info produces a row in the `leads` table — the owner triages
     from the Leads inbox and decides whether to promote to a contact.
 
+    April 28, 2026 — Lead Promotion Redesign Part D update:
+    existing_contact_id is no longer set at lead-creation time, even when
+    phone_hash matches an existing contact. The phone-match check now
+    happens at PROMOTION time in the CRM via /api/leads/check-match,
+    where the owner sees the matched contact's details and makes an
+    explicit decision (link / create new / edit lead first / cancel).
+    This eliminates silent misattribution (e.g. caller used a phone
+    that happens to match a different person's contact).
+
     Behavior:
       • Match phone_hash against existing contacts (primary OR alternate phone).
       • If a contact already exists:
           - Touch its last_interaction_at + last_summary (preserve repeat-caller
             recency display in the contact view; keep ai_notes accumulation).
           - DO NOT change pipeline_status, source, channel, or names.
-          - Set lead.existing_contact_id = that contact's id, so the inbox
-            shows "↗ Linked to {Name}" and Make Contact resolves to that
-            contact (no duplicate).
+          - DO NOT set lead.existing_contact_id — that decision moves to
+            promotion time (Part D, April 28).
           - Set calls.contact_id so dashboard Recent Activity keeps showing
             the caller's name immediately (legacy linkage preserved).
       • If no contact match:
-          - No contact INSERT (this is what fixes the 409 upsert race).
+          - No contact INSERT (fixes the 409 upsert race).
           - Lead row is the only artifact; lead.existing_contact_id = null.
           - calls.contact_id stays NULL until the owner promotes the lead.
             Recent Activity will show "Unknown Caller" for first-time callers
@@ -996,7 +1004,21 @@ async def extract_lead_from_transcript(
             "source_detail":     "Aria phone call",
             "status":            "new",
             "aria_summary":      encrypt_pii(transcript[:500]),
-            "existing_contact_id": existing_contact["id"] if existing_contact else None,
+            # April 28, 2026 — Lead Promotion Redesign Part D:
+            # existing_contact_id is intentionally always NULL at lead
+            # creation. The phone-match check happens at PROMOTION TIME
+            # in the CRM (/api/leads/check-match), where the owner makes
+            # the explicit decision (link to existing / create new /
+            # edit lead first / cancel). Auto-setting this here was
+            # silently misattributing leads — e.g. Aria created a lead
+            # for "Joan" via Caller-ID phone that matched Max's contact,
+            # and clicking Make Contact silently linked Joan → Max.
+            #
+            # Contact-side touch (last_interaction_at, last_summary,
+            # ai_notes) above still happens for repeat-caller display,
+            # which is correct — that's about the contact's record
+            # showing "they called" without claiming the lead is them.
+            "existing_contact_id": None,
             "call_id":           call_uuid,
         }
         # Names: include only if NO mismatch (when matched), or always when
