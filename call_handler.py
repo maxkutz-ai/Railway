@@ -423,8 +423,9 @@ school, family, front desk):
 3. Wait for the caller to state their name. Match it to one of the known contacts.
 4. LOCK all context — notes, history, preferences, special instructions — to that
    specific contact UUID for the ENTIRE remainder of the call.
-5. If caller says "someone else" or gives an unknown name: treat as NEW_LEAD,
-   collect their full name, and create a new contact record.
+5. If caller says "someone else" or gives an unknown name: collect their
+   full name and contact info as you would for any new caller — a lead
+   row will be created automatically after the call ends.
 6. Never mix or blend context between different contacts on the same number.
 ━━━ END SHARED LINE ━━━
 
@@ -729,9 +730,34 @@ async def extract_lead_from_transcript(
 ):
     """
     Post-call: send transcript to GPT-4o-mini to extract structured lead data,
-    then UPSERT into the contacts table.
-    - If phone already exists for business → UPDATE name/email/summary
-    - If new caller → CREATE contact record
+    then INSERT into the leads table.
+
+    Session 3 (April 27, 2026) rewire:
+    Aria no longer creates contacts directly. Every inbound call that captures
+    lead-grade info produces a row in the `leads` table — the owner triages
+    from the Leads inbox and decides whether to promote to a contact.
+
+    Behavior:
+      • Match phone_hash against existing contacts (primary OR alternate phone).
+      • If a contact already exists:
+          - Touch its last_interaction_at + last_summary (preserve repeat-caller
+            recency display in the contact view; keep ai_notes accumulation).
+          - DO NOT change pipeline_status, source, channel, or names.
+          - Set lead.existing_contact_id = that contact's id, so the inbox
+            shows "↗ Linked to {Name}" and Make Contact resolves to that
+            contact (no duplicate).
+          - Set calls.contact_id so dashboard Recent Activity keeps showing
+            the caller's name immediately (legacy linkage preserved).
+      • If no contact match:
+          - No contact INSERT (this is what fixes the 409 upsert race).
+          - Lead row is the only artifact; lead.existing_contact_id = null.
+          - calls.contact_id stays NULL until the owner promotes the lead.
+            Recent Activity will show "Unknown Caller" for first-time callers
+            until promotion. (Follow-up: add calls.lead_id + update widget.)
+
+    The lead row's aria_summary is encrypted via encrypt_pii (matches the
+    CRM's lib/encryption.ts wire format byte-for-byte — already verified
+    bidirectionally in Phase 2a).
     """
     if not transcript or not business_id:
         return
@@ -864,14 +890,14 @@ async def extract_lead_from_transcript(
             except Exception as e:
                 logger.debug(f"ZIP 28 alternate phone lookup non-fatal error: {e}")
 
-        # ── ZIP 28: Detect name mismatch ─────────────────────────────────────
-        # If the existing contact already has a different first_name, log the
-        # captured caller name to calls.name_mismatch_caller and exclude it
-        # from the upsert payload so we don't overwrite the contact's name.
         captured_first = (extracted.get("first_name") or "").strip()
         captured_last  = (extracted.get("last_name") or "").strip()
-        name_mismatch  = False
+        captured_email = (extracted.get("email") or "").strip()
 
+        # ── ZIP 28: Detect name mismatch (still relevant for the existing-
+        # contact UPDATE path below — we don't overwrite a stored name with
+        # a captured name that differs).
+        name_mismatch = False
         if existing_contact and captured_first:
             existing_first = (existing_contact.get("first_name") or "").strip()
             if existing_first and existing_first.lower() != captured_first.lower():
@@ -888,102 +914,130 @@ async def extract_lead_from_transcript(
                 except Exception as e:
                     logger.warning(f"ZIP 28: Failed to log name mismatch: {e}")
 
-        contact_row = {
-            "business_id":      business_id,
-            "phone":            encrypt_pii(phone_clean),    # AES-256 at-rest PII encryption
-            "phone_hash":       hash_pii(phone_clean),       # Railway dedup key (HMAC-SHA256)
-            "phone_normalized": phone_normalized_e164,       # CRM dedup key (E.164, indexed)
-            "lead_status":        "new",
-            "pipeline_status":    "NEW_LEAD",   # 6-stage pipeline
-            "channel":            "ARIA_PHONE",
-            "source":             "call",
-            "last_interaction_at": datetime.now(timezone.utc).isoformat(),
-            "last_summary": transcript[:500],
-            "ai_notes":     (encrypt_text if should_encrypt() else lambda x: x)(_json.dumps({
-                "interest":    extracted.get("interest"),
-                "intent":      extracted.get("intent"),
-                "captured_at": datetime.now(timezone.utc).isoformat(),
-                "call_sid":    call_sid,
-            })),
-            "updated_at":   datetime.now(timezone.utc).isoformat(),
-        }
-
-        # ZIP 28: Only include captured names if NO mismatch with existing contact
-        if not name_mismatch:
-            if captured_first:
-                contact_row["first_name"] = captured_first
-            if captured_last:
-                contact_row["last_name"] = captured_last
-        if extracted.get("email"):
-            contact_row["email"] = extracted["email"]
-
-        # ── ZIP 28: Route to UPDATE for alternate-phone matches ──────────────
-        # When matched via alternate_phone, the phone_hash-keyed UPSERT below
-        # would create a NEW contact (different phone_hash). Instead, do an
-        # UPDATE on the existing contact's id, stripping fields that would
-        # overwrite their primary phone identity.
-        if matched_via == "alternate":
-            update_payload = {
-                k: v for k, v in contact_row.items()
-                if k not in ("phone", "phone_hash", "phone_normalized",
-                             "business_id", "channel", "source", "lead_status",
-                             "pipeline_status")
+        # ── Existing-contact path: TOUCH the contact, no schema changes ─────
+        # If phone_hash matched an existing contact (primary OR alternate),
+        # update their last_interaction_at + last_summary + ai_notes so the
+        # contact view continues to show "what did they call about last
+        # time" data. We DO NOT touch:
+        #   - pipeline_status (owner manages stage transitions)
+        #   - source / channel (these set the original-acquisition source;
+        #     they're write-once)
+        #   - first_name / last_name (avoid overwriting a stored identity
+        #     with whatever Aria heard on this call)
+        #   - phone / phone_hash / phone_normalized (write-once identity)
+        contact_id_for_call_link = None  # set when matched
+        if existing_contact:
+            contact_id_for_call_link = existing_contact["id"]
+            touch_payload = {
+                "last_interaction_at": datetime.now(timezone.utc).isoformat(),
+                "last_summary":        transcript[:500],
+                "updated_at":          datetime.now(timezone.utc).isoformat(),
             }
+            # Append the ai_notes JSON snapshot (read-then-write — single
+            # caller, no concurrency concern within one call's post-processing).
             try:
-                sb.table("contacts").update(update_payload).eq(
+                ai_note_json = (encrypt_text if should_encrypt() else lambda x: x)(_json.dumps({
+                    "interest":    extracted.get("interest"),
+                    "intent":      extracted.get("intent"),
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "call_sid":    call_sid,
+                }))
+                # Get existing ai_notes; append. Skip if read fails.
+                existing_notes_res = sb.table("contacts").select("ai_notes").eq(
+                    "id", existing_contact["id"]
+                ).maybe_single().execute()
+                prev_notes = (existing_notes_res.data.get("ai_notes") or "") if existing_notes_res.data else ""
+                touch_payload["ai_notes"] = (prev_notes + "\n\n" + ai_note_json).strip() if prev_notes else ai_note_json
+            except Exception as note_err:
+                logger.debug(f"ai_notes append failed (non-fatal): {note_err}")
+
+            try:
+                sb.table("contacts").update(touch_payload).eq(
                     "id", existing_contact["id"]
                 ).execute()
-                upsert_result = type("R", (), {"data": [{"id": existing_contact["id"]}]})()
                 logger.info(
-                    f"ZIP 28: Updated existing contact {existing_contact['id']} via alternate phone path"
+                    f"Existing contact {existing_contact['id']} touched "
+                    f"(matched_via={matched_via}); no pipeline change"
                 )
-            except Exception as e:
-                logger.error(f"ZIP 28: alternate-phone UPDATE failed, falling back to upsert: {e}")
-                # Fall through to upsert as safety net
-                upsert_result = sb.table("contacts").upsert(
-                    contact_row,
-                    on_conflict="business_id,phone_hash",
-                ).execute()
-        else:
-            # UPSERT — match on (business_id, phone_hash)
-            # Targets `contacts_business_id_phone_hash_unique` (migration 015),
-            # which is a FULL non-partial unique index — the only kind PostgREST
-            # can use as an ON CONFLICT target via the URL parameter.
-            #
-            # The other unique index on this table, `uniq_contacts_business_phone`
-            # on (business_id, phone_normalized), is partial:
-            #     WHERE phone_normalized IS NOT NULL
-            # PostgREST refuses partial indexes for ON CONFLICT (no way to
-            # express the WHERE predicate in ?on_conflict=col1,col2), so we
-            # cannot target it from this code path. It still enforces uniqueness
-            # at the storage layer as a safety net.
-            #
-            # PRECONDITION: every contact row in this table must have a non-null
-            # phone_hash. Legacy rows created before the phone_hash column existed
-            # will collide on the partial phone_normalized index when this upsert
-            # falls through to INSERT (NULL phone_hash doesn't conflict with the
-            # new row's non-NULL hash, so PostgreSQL skips the UPDATE branch and
-            # tries INSERT, which then violates uniq_contacts_business_phone).
-            # The migration that backfills phone_hash on legacy rows must run
-            # before this code path will succeed cleanly for those numbers.
-            upsert_result = sb.table("contacts").upsert(
-                contact_row,
-                on_conflict="business_id,phone_hash",
-            ).execute()
-        if not (upsert_result.data and upsert_result.data[0].get("id")):
-            id_result = sb.table("contacts").select("id").eq(
+            except Exception as touch_err:
+                # Non-fatal: lead row is the source of truth for triage;
+                # if the touch fails the owner still sees the lead.
+                logger.warning(f"Existing-contact touch failed (non-fatal): {touch_err}")
+
+        # ── Always: INSERT a lead row ───────────────────────────────────────
+        # The leads inbox is the single source of truth for new triage work,
+        # whether the caller is brand new or an existing client. The owner
+        # sees "↗ Linked to {Name}" when existing_contact_id is set, and
+        # the Make Contact button labels accordingly.
+        #
+        # Resolve the calls.id UUID (FK target for leads.call_id) by looking
+        # up the call we just saved by its twilio_call_sid. This is one
+        # extra round-trip per call — acceptable for a post-call task.
+        call_uuid = None
+        try:
+            call_lookup = sb.table("calls").select("id").eq(
                 "business_id", business_id
-            ).eq("phone_hash", contact_row["phone_hash"]).maybe_single().execute()
-            if id_result.data:
-                upsert_result = type("R", (), {"data": [id_result.data]})()
+            ).eq("twilio_call_sid", call_sid).limit(1).execute()
+            if call_lookup.data:
+                call_uuid = call_lookup.data[0]["id"]
+        except Exception as cl_err:
+            logger.debug(f"calls.id lookup failed (non-fatal): {cl_err}")
 
-        logger.info(f"Contact upserted: {phone_clean} for {business_id}")
+        # Build the lead row. Plaintext phone per leads schema (Phase 2b
+        # will unify encryption with contacts in a coordinated migration).
+        # aria_summary is encrypted to match the CRM's lib/encryption.ts
+        # wire format byte-for-byte (Phase 2a parity).
+        lead_row = {
+            "business_id":       business_id,
+            "phone":             phone_clean,
+            "phone_hash":        phone_hash_val,
+            "phone_normalized":  phone_normalized_e164,
+            "source":            "call",
+            "source_detail":     "Aria phone call",
+            "status":            "new",
+            "aria_summary":      encrypt_pii(transcript[:500]),
+            "existing_contact_id": existing_contact["id"] if existing_contact else None,
+            "call_id":           call_uuid,
+        }
+        # Names: include only if NO mismatch (when matched), or always when
+        # no existing contact. New-caller rows get the captured names
+        # straight from Aria's extractor.
+        if not (existing_contact and name_mismatch):
+            if captured_first:
+                lead_row["first_name"] = captured_first
+            if captured_last:
+                lead_row["last_name"]  = captured_last
+        if captured_email:
+            lead_row["email"] = captured_email
 
-        # Link the contact back to the call record so Recent Activity shows name
-        if upsert_result.data and call_sid:
-            contact_id = upsert_result.data[0]["id"]
-            sb.table("calls").update({"contact_id": contact_id}).eq("twilio_call_sid", call_sid).execute()
-            logger.info(f"Linked call {call_sid} → contact {contact_id}")
+        try:
+            insert_res = sb.table("leads").insert(lead_row).execute()
+            if insert_res.data:
+                lead_id = insert_res.data[0].get("id")
+                logger.info(
+                    f"Lead inserted id={lead_id} biz={business_id} "
+                    f"phone={phone_clean} matched_via={matched_via}"
+                )
+        except Exception as ins_err:
+            logger.error(f"Lead INSERT failed: {ins_err}")
+            # Non-fatal — the call is already saved and the existing
+            # contact (if any) was touched. Owner won't see the lead in
+            # the inbox, but no data is lost. Worth alerting on.
+
+        # Preserve legacy linkage: calls.contact_id is set ONLY when we
+        # matched an existing contact, so the dashboard's Recent Activity
+        # widget continues to show their name. First-time callers leave
+        # calls.contact_id NULL — caller name is discoverable via the
+        # leads inbox until the lead is promoted. (Follow-up session:
+        # add calls.lead_id and update the widget.)
+        if contact_id_for_call_link and call_sid:
+            try:
+                sb.table("calls").update({
+                    "contact_id": contact_id_for_call_link
+                }).eq("twilio_call_sid", call_sid).execute()
+                logger.info(f"Linked call {call_sid} → existing contact {contact_id_for_call_link}")
+            except Exception as link_err:
+                logger.debug(f"calls.contact_id link failed (non-fatal): {link_err}")
 
     except Exception as e:
         logger.warning(f"Lead extraction failed (non-critical): {e}")
@@ -1745,67 +1799,6 @@ async def twilio_incoming(request: Request):
     from_number = form.get("From", "")
     call_sid    = form.get("CallSid", "")
 
-    # ── Browser-bridge leg detection ─────────────────────────────────────────
-    # When a CRM staff member clicks "Transfer to PC", their browser's Twilio
-    # Device makes an outbound call. That call routes through our TwiML App,
-    # whose Voice URL is configured to /twilio-incoming (this handler).
-    #
-    # Without this guard, the browser leg would fall through to the standard
-    # PSTN inbound flow: open a Media Stream, connect to OpenAI Realtime, and
-    # start a SECOND Aria session — but on the staff member's microphone, in
-    # parallel to the original caller's session. That's wrong: the staff leg
-    # should silently join the conference room (set up by /browser-bridge),
-    # with no AI, no media stream, no OpenAI bill.
-    #
-    # Twilio Client legs are identifiable by `From` starting with "client:"
-    # (e.g. "client:staff-1777228677"). The conference room name comes from
-    # the outbound `To` parameter (e.g. "receptionist-bridge-002cc03d") that
-    # the browser-side Twilio Device set when initiating the outbound call.
-    if from_number.startswith("client:"):
-        # Validate conference room name format before injecting into TwiML.
-        # Even though `To` is set by our own browser-side code, treat it as
-        # untrusted defense-in-depth — Twilio reflects this value verbatim.
-        if not re.match(r"^receptionist-bridge-[a-zA-Z0-9_-]{1,40}$", to_number):
-            logger.warning(
-                f"Browser leg with unexpected To field — refusing to bridge: "
-                f"from={from_number} to={to_number!r}"
-            )
-            return Response(
-                content='<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>',
-                media_type="application/xml",
-            )
-
-        logger.info(
-            f"Browser leg joining conference: {from_number} → {to_number} ({call_sid})"
-        )
-
-        # XML-escape conf room name belt-and-suspenders; the regex above
-        # already restricts to safe characters, but the escape is cheap.
-        from xml.sax.saxutils import escape as _xml_escape
-        conf_room_safe = _xml_escape(to_number)
-
-        # Conference attributes:
-        #   startConferenceOnEnter="true"   — caller's leg has this False, so
-        #                                     they wait with hold music until
-        #                                     this staff leg joins. We're the
-        #                                     trigger that starts the bridge.
-        #   endConferenceOnExit="true"      — when staff hangs up, the conf
-        #                                     ends; caller is not stranded.
-        #   beep="false"                    — match the caller's leg, no
-        #                                     announcement on entry.
-        twiml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            '<Response>'
-            '<Dial>'
-            f'<Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">'
-            f'{conf_room_safe}'
-            '</Conference>'
-            '</Dial>'
-            '</Response>'
-        )
-        return Response(content=twiml, media_type="application/xml")
-    # ── End browser-leg detection ────────────────────────────────────────────
-
     logger.info(f"Inbound call: {from_number} → {to_number} ({call_sid})")
 
     host       = request.headers.get("host", "aria-call-handler-production.up.railway.app")
@@ -2130,8 +2123,9 @@ async def media_stream(websocket: WebSocket):
                     is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
 
                     # ── After-Hours Detection ─────────────────────────────────────
-                    # Per Zero Audio Retention Policy: no voicemail — Aria takes message
-                    # and creates a NEW_LEAD CRM record flagged for morning follow-up
+                    # Per Zero Audio Retention Policy: no voicemail — Aria takes
+                    # the message; the post-call extractor creates a lead row
+                    # in the inbox (status='new') for morning follow-up.
                     try:
                         from zoneinfo import ZoneInfo
                         biz_tz  = ZoneInfo(tz)
@@ -2155,7 +2149,7 @@ async def media_stream(websocket: WebSocket):
                                 "3. Collect: caller name, phone number, and their message/request.\n"
                                 "4. Confirm: 'Perfect — a team member will reach out to you first thing in the morning!'\n"
                                 "IMPORTANT: This replaces traditional voicemail. No audio is stored — "
-                                "only this transcript becomes the CRM record (NEW_LEAD status).\n"
+                                "only this transcript becomes the CRM record (lead inbox).\n"
                             )
                     except Exception as tz_err:
                         logger.debug(f"After-hours check: {tz_err}")
@@ -3531,15 +3525,7 @@ async def warm_handoff(req: Request):
         await openai_ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                # GA Realtime API (April 2026): renamed `modalities` →
-                # `output_modalities`. The previous shape was the beta API
-                # field name and is now rejected with:
-                #   "Unknown parameter: 'response.modalities'"
-                # GA also no longer accepts both ["text", "audio"] together;
-                # output is single-valued. Twilio is audio-only, so ["audio"].
-                # Matches the same fix already applied at session.update
-                # (see line ~2297 above).
-                "output_modalities": ["audio"],
+                "modalities": ["text", "audio"],
                 "instructions": prompt,
             }
         }))
