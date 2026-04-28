@@ -3873,48 +3873,20 @@ async def transfer_call(req: Request):
     # Browser mode: stop Aria FIRST, then redirect call to browser Client
     if mode == "browser" and identity:
         try:
-            openai_ws = _active_openai_ws.get(call_sid)
-
-            # April 28, 2026 — Aria announcement before browser bridge.
-            # Previously the browser-mode flow closed the WebSocket
-            # abruptly, so the caller heard Aria mid-sentence get cut off
-            # then silence then a stranger's voice. This injects a courtesy
-            # line ("One moment, connecting you now...") before the close
-            # so the caller gets a graceful handoff. Mirrors the warm/phone
-            # branch pattern further below.
-            #
-            # The frontend currently always sends announced=true, but the
-            # frontend itself doesn't actually announce — that flag was
-            # set defensively. We always announce for browser mode here
-            # because there's no frontend mechanism to do it (the browser
-            # device isn't even connected yet at this point). If the
-            # frontend ever adopts a real announce step, this can become
-            # conditional on `announced=False`.
-            if openai_ws:
-                try:
-                    await openai_ws.send(json.dumps({
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type":    "message",
-                            "role":    "system",
-                            "content": [{"type": "input_text", "text": "Say exactly: 'One moment, connecting you now.' Then stop speaking."}],
-                        }
-                    }))
-                    await openai_ws.send(json.dumps({
-                        "type": "response.create",
-                        "response": {"output_modalities": ["audio"]}
-                    }))
-                    # Give Aria time to actually say the line before close.
-                    # 3.0s matches the warm/phone branch timing — long
-                    # enough for "One moment, connecting you now" + a
-                    # touch of buffer so we don't cut the last word.
-                    await asyncio.sleep(3.0)
-                except Exception as e:
-                    logger.warning(f"Browser-mode announce inject failed (continuing): {e}")
-
             # Step 1: Close the OpenAI WebSocket so Aria stops speaking.
             # This must happen BEFORE Twilio redirects the call, otherwise
             # the staff member hears Aria instead of the caller.
+            #
+            # NOTE (April 28, 2026): the new transfer modal flow
+            # (features/live-call/LiveCallSystem.tsx) does NOT call this
+            # branch — it uses /warm-handoff + /browser-bridge instead,
+            # mirroring the proven features/live-monitor flow. This
+            # branch is kept for backward compat with features/live-call-box
+            # which still POSTs mode=browser to /transfer-call directly.
+            # An earlier iteration injected an Aria announcement here;
+            # removed because the new flow's /warm-handoff handles the
+            # courtesy line, and double-announcing would confuse the caller.
+            openai_ws = _active_openai_ws.get(call_sid)
             if openai_ws:
                 try:
                     await openai_ws.close()
