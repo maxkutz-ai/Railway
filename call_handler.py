@@ -4170,23 +4170,27 @@ async def browser_bridge(req: Request):
     conf_room = f"receptionist-bridge-{call_sid[-8:]}"
 
     try:
-        # Step 1: First have Aria say farewell and stop transcribing
+        # Step 1: Close the OpenAI WebSocket FIRST so Aria stops talking.
+        # April 28, 2026 — was previously injecting a "Perfect! Please hold
+        # for just one moment while I connect you to our specialist" line
+        # AFTER /warm-handoff Script S had ALREADY told the caller to hold
+        # ("One of our team members is jumping on the line right now…").
+        # That made Aria talk twice in quick succession, and then the
+        # silence monitor fired a THIRD "Are you still there?" while the
+        # caller was already in the conference room. Triple-Aria.
+        # Removed the farewell injection here — Script S covers the
+        # announcement. Closing openai_ws before the conference redirect
+        # also prevents any further utterances from leaking into the
+        # caller's audio between the redirect and the staff joining.
         openai_ws = _active_openai_ws.get(call_sid)
         if openai_ws:
             try:
-                farewell = (
-                    "SYSTEM: The human staff member is now joining the call via their browser. "
-                    "Say: 'Perfect! Please hold for just one moment while I connect you to our specialist.' "
-                    "Then stay silent — the human will take over completely."
-                )
-                await openai_ws.send(json.dumps({
-                    "type": "conversation.item.create",
-                    "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": farewell}]}
-                }))
-                await openai_ws.send(json.dumps({"type": "response.create"}))
-                await asyncio.sleep(3)  # let Aria finish speaking
-            except Exception as aria_err:
-                logger.debug(f"Browser bridge Aria farewell: {aria_err}")
+                await openai_ws.close()
+                logger.info(f"OpenAI stream closed for browser bridge: {call_sid}")
+            except Exception as close_err:
+                logger.debug(f"Browser bridge openai close: {close_err}")
+        # Tiny buffer so Twilio drains any in-flight audio chunks.
+        await asyncio.sleep(0.5)
 
         # Step 2: Move caller into conference via Twilio REST
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
