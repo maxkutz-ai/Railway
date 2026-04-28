@@ -3595,7 +3595,10 @@ async def appointment_completed_hook(request: Request):
 
         # For now fire immediately (in production use a task queue with delay)
         # TODO: add APScheduler or Railway cron for delayed sends
-        import asyncio
+        # (asyncio is imported at module scope — no local import needed.
+        # April 28, 2026: removed redundant local import to match the
+        # transfer_call cleanup; same anti-pattern, even if it didn't
+        # cause UnboundLocalError here because no earlier asyncio use.)
         asyncio.create_task(asyncio.sleep(delay_hours * 3600))
         # Simplified: just send after delay
         await send_review_request(
@@ -3984,7 +3987,14 @@ async def transfer_call(req: Request):
         await openai_ws.send(json.dumps({"type": "response.create"}))
 
         # Step 2: Give Aria 3 seconds to finish speaking, then transfer via Twilio
-        import asyncio
+        # April 28, 2026: removed redundant `import asyncio` here — it was
+        # shadowing the module-level import (line 38) and causing
+        # UnboundLocalError on the earlier `await asyncio.sleep(0.5)` at
+        # line 3880 (browser-mode branch). Python treats any binding-style
+        # statement (including local import) as turning ALL occurrences of
+        # the name into local references throughout the function — even
+        # ones BEFORE the import line. asyncio is already imported at
+        # module scope; no local import needed.
         await asyncio.sleep(3)
 
         # Step 3: Use Twilio REST to redirect the call with <Dial>
