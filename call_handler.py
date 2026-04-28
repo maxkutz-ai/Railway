@@ -1069,7 +1069,8 @@ async def notify_lead_captured(business_id: str, transcript: str, from_number: s
     Fire a lead notification (SMS + email) to the business owner
     when Aria captures a full lead (name + phone + email detected in transcript).
     """
-    import re
+    # April 28, 2026: removed redundant local `import re` (re imported at
+    # module scope line 16). Was a time-bomb shadow per don't-repeat #57.
     # Quick heuristic: check if transcript has email pattern
     # Notify if we captured a name OR email — Steve (no email) still gets a notification
     has_email   = bool(re.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', transcript))
@@ -3416,7 +3417,10 @@ async def preview_report(business_id: str, request: Request):
         today  = date.today()
         period = f"Week of {(today - timedelta(days=7)).isoformat()} – {today.isoformat()}"
         html   = build_roi_email(biz["name"], "", period, stats)
-        from starlette.responses import HTMLResponse
+        # April 28, 2026: removed redundant local `from starlette.responses
+        # import HTMLResponse` — module imports HTMLResponse from
+        # fastapi.responses at line 40 (fastapi re-exports starlette's,
+        # so they're the same class). Was a time-bomb shadow per #57.
         return HTMLResponse(content=html)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -4003,7 +4007,12 @@ async def transfer_call(req: Request):
         RAILWAY_PUBLIC_URL = os.environ.get("RAILWAY_PUBLIC_URL", "")
 
         if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
-            import httpx
+            # April 28, 2026: removed redundant `import httpx` here — it
+            # was shadowing the module-level import (line 37) and causing
+            # UnboundLocalError on earlier httpx.AsyncClient() calls at
+            # lines 3900 + 3924 (browser/phone branch lookups that fire
+            # BEFORE this warm-mode-only branch). Same root cause as
+            # the asyncio shadowing bug. httpx already at module scope.
             # action= fires when the Dial leg ends (no-answer, busy, completed, failed)
             # We use it to detect a missed transfer and restore Aria automatically
             action_url = f"{RAILWAY_PUBLIC_URL}/transfer-status?call_sid={call_sid}" if RAILWAY_PUBLIC_URL else ""
@@ -4036,7 +4045,11 @@ async def twilio_access_token(request: Request):
     Generate a Twilio Access Token with Voice grant for browser-based calling.
     Used by the CRM Live Monitor to enable 'Answer in Browser' via Twilio Client JS.
     """
-    import base64, hmac, hashlib, time, json as _json_std
+    # April 28, 2026: removed dead `import base64, hmac, hashlib, time,
+    # json as _json_std` — leftover from old manual-JWT code path that
+    # was replaced by twilio.jwt.access_token.AccessToken below. None
+    # of those names are used in this function. The `base64` import
+    # was also a shadowing time bomb (per don't-repeat #57).
 
     # AccessToken requires API Key SID + Secret (NOT Auth Token)
     # Create these in Twilio Console → Account → API keys & tokens
