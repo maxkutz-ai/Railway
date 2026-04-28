@@ -1004,7 +1004,13 @@ async def extract_lead_from_transcript(
             "source":            "call",
             "source_detail":     "Aria phone call",
             "status":            "new",
-            "aria_summary":      encrypt_pii(transcript[:500]),
+            # April 28, 2026 — bumped 500 → 2000 chars. Lead detail view
+            # was showing the summary mid-sentence ("to make sure you get
+            # the exact r..."). 500 was too tight for any non-trivial
+            # transcript. Full transcript still lives in
+            # calls.full_transcript (8000 cap, ~line 1742) for cases
+            # where 2000 still isn't enough — surfaced via the Calls page.
+            "aria_summary":      encrypt_pii(transcript[:2000]),
             # April 28, 2026 — Lead Promotion Redesign Part D:
             # existing_contact_id is intentionally always NULL at lead
             # creation. The phone-match check happens at PROMOTION TIME
@@ -3661,6 +3667,26 @@ async def warm_handoff(req: Request):
     scripts = {
         "A": "SYSTEM OVERRIDE: Stop your current thought immediately. Say exactly: 'You know what, to make sure you get the exact right information on our pricing and availability for that, let me bring one of our specialists on the line. May I transfer you to them right now?' Then wait for the caller to say yes or no.",
         "B": "SYSTEM OVERRIDE: Stop your current thought immediately. Say exactly: 'I want to make sure you are fully taken care of with those specific details. Let me grab one of our team members at the front desk to jump in. Is it okay if I connect you now?' Then wait for the caller to say yes or no.",
+        # April 28, 2026 — Script S (Statement) for browser-bridge transfers.
+        # Scripts A and B ASK permission, which causes Aria to fire her own
+        # transfer_call function tool when the caller says yes — conflicting
+        # with the CRM's separate browser-bridge flow that's bridging the
+        # call into a Twilio Conference at the same time. Script S is a
+        # statement only (not a question), tells the caller to hold, and
+        # explicitly instructs Aria not to fire any tool. The CRM frontend
+        # sends script="S" for the browser-bridge flow.
+        "S": (
+            "SYSTEM OVERRIDE: Stop your current thought immediately. "
+            "Say exactly: 'One of our team members is jumping on the line "
+            "right now to help you with this. Please hold for just a moment.' "
+            "Then STOP SPEAKING and stay completely silent. "
+            "DO NOT ask the caller anything. "
+            "DO NOT wait for a response. "
+            "DO NOT call the transfer_call function or any other tool — "
+            "the human staff member is handling the transfer from their "
+            "dashboard. Your only job is to say the line above and then "
+            "be quiet. The bridge is being handled outside this conversation."
+        ),
     }
     prompt = scripts.get(script, scripts["A"])
 
