@@ -1821,6 +1821,72 @@ async def twilio_incoming(request: Request):
     from_number = form.get("From", "")
     call_sid    = form.get("CallSid", "")
 
+    # ── Browser-bridge leg detection ─────────────────────────────────────────
+    # When a CRM staff member clicks "Transfer to PC", their browser's Twilio
+    # Device makes an outbound call. That call routes through our TwiML App,
+    # whose Voice URL is configured to /twilio-incoming (this handler).
+    #
+    # Without this guard, the browser leg would fall through to the standard
+    # PSTN inbound flow: open a Media Stream, connect to OpenAI Realtime, and
+    # start a SECOND Aria session — but on the staff member's microphone, in
+    # parallel to the original caller's session. That's wrong: the staff leg
+    # should silently join the conference room (set up by /browser-bridge),
+    # with no AI, no media stream, no OpenAI bill.
+    #
+    # Twilio Client legs are identifiable by `From` starting with "client:"
+    # (e.g. "client:staff-1777228677"). The conference room name comes from
+    # the outbound `To` parameter (e.g. "receptionist-bridge-002cc03d") that
+    # the browser-side Twilio Device set when initiating the outbound call.
+    #
+    # First added April 26, 2026 (Day 7). Restored April 28, 2026 after
+    # being inadvertently dropped in a Day 8 merge — three concurrent
+    # call_handler.py edits (Lead Promotion, Transfer Fix, this) collided
+    # and one of them lost this block. Don't-repeat candidate added (#54).
+    if from_number.startswith("client:"):
+        # Validate conference room name format before injecting into TwiML.
+        # Even though `To` is set by our own browser-side code, treat it as
+        # untrusted defense-in-depth — Twilio reflects this value verbatim.
+        if not re.match(r"^receptionist-bridge-[a-zA-Z0-9_-]{1,40}$", to_number):
+            logger.warning(
+                f"Browser leg with unexpected To field — refusing to bridge: "
+                f"from={from_number} to={to_number!r}"
+            )
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>',
+                media_type="application/xml",
+            )
+
+        logger.info(
+            f"Browser leg joining conference: {from_number} → {to_number} ({call_sid})"
+        )
+
+        # XML-escape conf room name belt-and-suspenders; the regex above
+        # already restricts to safe characters, but the escape is cheap.
+        from xml.sax.saxutils import escape as _xml_escape
+        conf_room_safe = _xml_escape(to_number)
+
+        # Conference attributes:
+        #   startConferenceOnEnter="true"   — caller's leg has this False, so
+        #                                     they wait with hold music until
+        #                                     this staff leg joins. We're the
+        #                                     trigger that starts the bridge.
+        #   endConferenceOnExit="true"      — when staff hangs up, the conf
+        #                                     ends; caller is not stranded.
+        #   beep="false"                    — match the caller's leg, no
+        #                                     announcement on entry.
+        twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Response>'
+            '<Dial>'
+            f'<Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">'
+            f'{conf_room_safe}'
+            '</Conference>'
+            '</Dial>'
+            '</Response>'
+        )
+        return Response(content=twiml, media_type="application/xml")
+    # ── End browser-leg detection ────────────────────────────────────────────
+
     logger.info(f"Inbound call: {from_number} → {to_number} ({call_sid})")
 
     host       = request.headers.get("host", "aria-call-handler-production.up.railway.app")
