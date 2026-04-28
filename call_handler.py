@@ -2466,11 +2466,38 @@ async def media_stream(websocket: WebSocket):
                     await openai_ws.send(json.dumps({"type": "response.create"}))
 
                 elif event == "media":
+                    # ── April 28, 2026 — graceful close on transfer ──────
+                    # When /transfer-call (mode=browser) closes openai_ws
+                    # for browser takeover, the next iteration of this
+                    # loop would call openai_ws.send() and raise
+                    # ConnectionClosedOK. Without this guard the
+                    # exception escapes the asyncio task and surfaces as
+                    # "Task exception was never retrieved" — the
+                    # transfer-call HTTP response then failed with 500.
+                    #
+                    # The state-name check is the fast path. The
+                    # try/except handles the TOCTOU race between check
+                    # and send: openai_ws can close between those two
+                    # lines if the transfer-call route runs in parallel.
+                    #
+                    # On catch: stop forwarding (call_active=False),
+                    # log debug, exit the loop. Outer asyncio.wait at
+                    # ~line 2714 resolves naturally; receive_from_openai
+                    # already exits cleanly when openai_ws closes.
                     if not openai_ws.state.name == "CLOSED":
-                        await openai_ws.send(json.dumps({
-                            "type":  "input_audio_buffer.append",
-                            "audio": data["media"]["payload"],
-                        }))
+                        try:
+                            await openai_ws.send(json.dumps({
+                                "type":  "input_audio_buffer.append",
+                                "audio": data["media"]["payload"],
+                            }))
+                        except websockets.exceptions.ConnectionClosed:
+                            logger.debug(
+                                f"openai_ws closed mid-forward for {call_sid} "
+                                "(likely browser-takeover transfer); "
+                                "ending receive_from_twilio cleanly"
+                            )
+                            call_active = False
+                            break
 
                 elif event == "stop":
                     logger.info(f"Stream stopped: {stream_sid}")
