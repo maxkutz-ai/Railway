@@ -1821,6 +1821,72 @@ async def twilio_incoming(request: Request):
     from_number = form.get("From", "")
     call_sid    = form.get("CallSid", "")
 
+    # ── Browser-bridge leg detection ─────────────────────────────────────────
+    # When a CRM staff member clicks "Transfer to PC", their browser's Twilio
+    # Device makes an outbound call. That call routes through our TwiML App,
+    # whose Voice URL is configured to /twilio-incoming (this handler).
+    #
+    # Without this guard, the browser leg would fall through to the standard
+    # PSTN inbound flow: open a Media Stream, connect to OpenAI Realtime, and
+    # start a SECOND Aria session — but on the staff member's microphone, in
+    # parallel to the original caller's session. That's wrong: the staff leg
+    # should silently join the conference room (set up by /browser-bridge),
+    # with no AI, no media stream, no OpenAI bill.
+    #
+    # Twilio Client legs are identifiable by `From` starting with "client:"
+    # (e.g. "client:staff-1777228677"). The conference room name comes from
+    # the outbound `To` parameter (e.g. "receptionist-bridge-002cc03d") that
+    # the browser-side Twilio Device set when initiating the outbound call.
+    #
+    # First added April 26, 2026 (Day 7). Restored April 28, 2026 after
+    # being inadvertently dropped in a Day 8 merge — three concurrent
+    # call_handler.py edits (Lead Promotion, Transfer Fix, this) collided
+    # and one of them lost this block. Don't-repeat candidate added (#54).
+    if from_number.startswith("client:"):
+        # Validate conference room name format before injecting into TwiML.
+        # Even though `To` is set by our own browser-side code, treat it as
+        # untrusted defense-in-depth — Twilio reflects this value verbatim.
+        if not re.match(r"^receptionist-bridge-[a-zA-Z0-9_-]{1,40}$", to_number):
+            logger.warning(
+                f"Browser leg with unexpected To field — refusing to bridge: "
+                f"from={from_number} to={to_number!r}"
+            )
+            return Response(
+                content='<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>',
+                media_type="application/xml",
+            )
+
+        logger.info(
+            f"Browser leg joining conference: {from_number} → {to_number} ({call_sid})"
+        )
+
+        # XML-escape conf room name belt-and-suspenders; the regex above
+        # already restricts to safe characters, but the escape is cheap.
+        from xml.sax.saxutils import escape as _xml_escape
+        conf_room_safe = _xml_escape(to_number)
+
+        # Conference attributes:
+        #   startConferenceOnEnter="true"   — caller's leg has this False, so
+        #                                     they wait with hold music until
+        #                                     this staff leg joins. We're the
+        #                                     trigger that starts the bridge.
+        #   endConferenceOnExit="true"      — when staff hangs up, the conf
+        #                                     ends; caller is not stranded.
+        #   beep="false"                    — match the caller's leg, no
+        #                                     announcement on entry.
+        twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Response>'
+            '<Dial>'
+            f'<Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">'
+            f'{conf_room_safe}'
+            '</Conference>'
+            '</Dial>'
+            '</Response>'
+        )
+        return Response(content=twiml, media_type="application/xml")
+    # ── End browser-leg detection ────────────────────────────────────────────
+
     logger.info(f"Inbound call: {from_number} → {to_number} ({call_sid})")
 
     host       = request.headers.get("host", "aria-call-handler-production.up.railway.app")
@@ -1911,602 +1977,640 @@ async def media_stream(websocket: WebSocket):
 
         async def receive_from_twilio():
             nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent, last_cancel_at, call_active, to_number, from_number, call_active
-            async for message in websocket.iter_text():
-                data  = json.loads(message)
-                event = data.get("event")
+            try:
+                async for message in websocket.iter_text():
+                    data  = json.loads(message)
+                    event = data.get("event")
 
-                if event == "start":
-                    stream_sid = data["start"]["streamSid"]
-                    call_sid   = data["start"]["callSid"]
+                    if event == "start":
+                        stream_sid = data["start"]["streamSid"]
+                        call_sid   = data["start"]["callSid"]
 
-                    ctx_b64 = data["start"].get("customParameters", {}).get("ctx", "")
-                    if ctx_b64:
+                        ctx_b64 = data["start"].get("customParameters", {}).get("ctx", "")
+                        if ctx_b64:
+                            try:
+                                ctx   = base64.b64decode(ctx_b64).decode()
+                                parts = ctx.split("|")
+                                if len(parts) >= 3:
+                                    to_number, from_number, call_sid = parts[0], parts[1], parts[2]
+                            except:
+                                pass
+
+                        start_time = datetime.now(timezone.utc)  # actual call start
+                        logger.info(f"Stream started: {stream_sid} | {from_number} → {to_number}")
+                        # Register in global registry for warm-handoff
+                        _active_openai_ws[call_sid] = openai_ws
+                        _active_twilio_ws[call_sid]  = websocket
+                        _active_stream_sid[call_sid] = stream_sid
+
+                        # Start recording via Twilio REST API (compatible with Media Streams)
+                        # ZAR Policy: recording disabled
+
+                        # ── Twilio safety timeout (hard stop even if Railway hangs) ──────
                         try:
-                            ctx   = base64.b64decode(ctx_b64).decode()
-                            parts = ctx.split("|")
-                            if len(parts) >= 3:
-                                to_number, from_number, call_sid = parts[0], parts[1], parts[2]
-                        except:
-                            pass
+                            _ts = os.environ.get("TWILIO_ACCOUNT_SID",""); _tt = os.environ.get("TWILIO_AUTH_TOKEN","")
+                            if _ts and _tt and call_sid:
+                                _limit = (max_call_mins + 2) * 60
+                                async with httpx.AsyncClient() as _tc:
+                                    await _tc.post(
+                                        f"https://api.twilio.com/2010-04-01/Accounts/{_ts}/Calls/{call_sid}.json",
+                                        auth=(_ts, _tt), data={"TimeLimit": str(_limit)}, timeout=4.0,
+                                    )
+                                logger.debug(f"Twilio TimeLimit={_limit}s for {call_sid}")
+                        except Exception as _tl: logger.debug(f"TimeLimit: {_tl}")
 
-                    start_time = datetime.now(timezone.utc)  # actual call start
-                    logger.info(f"Stream started: {stream_sid} | {from_number} → {to_number}")
-                    # Register in global registry for warm-handoff
-                    _active_openai_ws[call_sid] = openai_ws
-                    _active_twilio_ws[call_sid]  = websocket
-                    _active_stream_sid[call_sid] = stream_sid
+                        # Load business config + memories
+                        business_cfg = await get_business_config(to_number)
+                        business_id  = business_cfg.get("business_id", "")
+                        biz_name     = (business_cfg.get("businesses") or {}).get("name", "this business")
+                        settings     = business_cfg.get("settings_business") or {}
+                        custom_instr = settings.get("aria_personality") or ""
+                        hours        = settings.get("business_hours") or "Mon-Fri 9AM-5PM"
+                        tz               = settings.get("timezone") or "America/Denver"
+                        max_call_mins    = int(settings.get("max_call_duration_minutes") or 10)
+                        memories         = business_cfg.get("memories") or []
 
-                    # Start recording via Twilio REST API (compatible with Media Streams)
-                    # ZAR Policy: recording disabled
+                        memory_block = build_memory_block(memories)
 
-                    # ── Twilio safety timeout (hard stop even if Railway hangs) ──────
-                    try:
-                        _ts = os.environ.get("TWILIO_ACCOUNT_SID",""); _tt = os.environ.get("TWILIO_AUTH_TOKEN","")
-                        if _ts and _tt and call_sid:
-                            _limit = (max_call_mins + 2) * 60
-                            async with httpx.AsyncClient() as _tc:
-                                await _tc.post(
-                                    f"https://api.twilio.com/2010-04-01/Accounts/{_ts}/Calls/{call_sid}.json",
-                                    auth=(_ts, _tt), data={"TimeLimit": str(_limit)}, timeout=4.0,
+                        # ── Pull all config sections ──────────────────────────
+                        ai_cfg   = business_cfg.get("ai_config") or {}
+                        ai_set   = business_cfg.get("ai_settings") or {}
+                        svc_list = business_cfg.get("services") or []
+
+                        # Brand name: prefer brand_name from settings, fall back to businesses.name
+                        biz_name = settings.get("brand_name") or biz_name
+
+                        # Aria's name (can be customized per business)
+                        aria_name = ai_cfg.get("name") or "Aria"
+
+                        # Format services as a readable menu
+                        if svc_list:
+                            svc_lines = "\n".join([
+                                f"  - {s['name']}"
+                                + (f" ({s['duration_minutes']} min)" if s.get('duration_minutes') else "")
+                                + (f" — Starts at ${s['price']}" if s.get('price') else "")
+                                + (f": {s['description']}" if s.get('description') else "")
+                                for s in svc_list
+                            ])
+                            services_block = f"\n━━━ SERVICES MENU ━━━\n{svc_lines}\n━━━ END SERVICES ━━━"
+                        else:
+                            services_block = ""
+
+                        # Custom emergency keywords (per business, or global defaults)
+                        emergency_kw = ai_set.get("emergency_keywords") or [
+                            "flooded", "sparking", "burst pipe", "gas leak",
+                            "allergic reaction", "chest pain", "not breathing",
+                            "fire", "bleeding", "emergency"
+                        ]
+                        if isinstance(emergency_kw, list):
+                            emergency_str = ", ".join(emergency_kw)
+                        else:
+                            emergency_str = str(emergency_kw)
+
+                        # Max call duration: ai_settings overrides settings_business
+                        max_call_mins = int(
+                            ai_set.get("max_call_duration_mins") or
+                            settings.get("max_call_duration_minutes") or 10
+                        )
+
+                        # Voice: ai_settings.voice_id overrides global default
+                        voice = ai_set.get("voice_id") or OPENAI_VOICE
+
+                        # Business address
+                        address = settings.get("address") or ""
+
+                        # ── Compliance: recording announcement ────────────────────
+                        announce_recording = settings.get("announce_recording", True)  # default ON — TCPA/CIPA safe harbor
+                        consent_text = (
+                            settings.get("recording_consent_text") or
+                            f"This call may be recorded and monitored for quality and training purposes."
+                        )
+                        # Industry (medical vs trades vs general) — shapes greeting style
+                        industry = (settings.get("industry_vertical") or "GENERAL_BUSINESS").upper()
+
+                        if announce_recording:
+                            # Three consent script styles — operator chooses in CRM Settings
+                            consent_style = settings.get("consent_greeting_style", "conversational")
+                            if consent_style == "formal" or "MEDICAL" in industry:
+                                disclosure = f"Please note: {consent_text}"
+                            elif consent_style == "transparent":
+                                disclosure = f"Just so you know — {consent_text.lower()} My human team also monitors these calls to make sure you get the best service."
+                            else:  # conversational (default)
+                                disclosure = f"Quick heads-up — {consent_text.lower()}"
+
+                            compliance_rule = (
+                                f"LEGAL COMPLIANCE CONFIRMED: The opening greeting already contains the required\n"
+                                f"recording and monitoring disclosure: \"{disclosure}\"\n"
+                                f"This disclosure is embedded in Part 1 of your opening — DO NOT repeat it mid-call.\n"
+                                f"The caller's continued presence on the line constitutes implied consent (TCPA/CIPA).\n"
+                                f"If a caller asks if the call is recorded, confirm it is: 'Yes, this call is recorded.'\n"
+                                f"Never deny or downplay the recording disclosure."
+                            )
+                        else:
+                            compliance_rule = (
+                                "The business has verified their state's recording laws and opted out "
+                                "of the recording announcement. Start the call naturally."
+                            )
+
+                        # ── Industry Vertical (home services vs general) ─────────────
+                        # Phase Contacts-1: medical vertical code path removed.
+                        # Product scope no longer targets HIPAA-regulated verticals;
+                        # the MEDICAL VERTICAL COMPLIANCE RULES block that used to
+                        # inject into Aria's system prompt has been retired. If/when
+                        # medical support returns, restore from git history.
+                        industry_vert    = settings.get("industry_vertical", "general")
+
+                        # ── 2-Way Industry Vertical Fork ─────────────────────────────────────
+                        # Fetch safety settings
+                        emerg_email = settings.get("emergency_contact_email", "") or ""
+                        emerg_phone = settings.get("emergency_contact_phone", "") or ""
+                        service_areas = settings.get("supported_service_areas") or []
+
+                        is_home_services = industry_vert in (
+                            "home_services", "hvac", "plumbing", "electrical",
+                            "roofing", "trades", "contractor", "home_services_trades"
+                        )
+
+                        if is_home_services:
+                            compliance_rule += (
+                                "\n\nHOME SERVICES & TRADES PROTOCOL (MANDATORY):\n"
+                                "PHYSICAL EMERGENCY PROTOCOL: If caller reports gas smell, sparking panels, active flooding, or life-threatening hazards, immediately say: Please evacuate and call 911 or your local utility company. I am flagging this as a CRITICAL emergency for our dispatch team. Then stop the booking flow.\\n"
+                                "You are dispatching for a home services company. Customers calling with "
+                                "emergencies (burst pipe, no AC, power out) need immediate help — "
+                                "do NOT send them a form or a link. Complete the entire booking over the phone.\n"
+                                "COLLECT ALL FOUR DATA POINTS VERBALLY:\n"
+                                "1. FIRST AND LAST NAME: Get both first and last name.\n"
+                                "2. CELL PHONE NUMBER: Confirm the best callback number.\n"
+                                "3. SERVICE ADDRESS: Ask 'What is the service address, including city and zip?' "
+                                "MANDATORY ADDRESS READ-BACK: After collecting the address, read it back verbatim: Just to confirm — [repeat full address] — did I get that right? Do NOT trigger the webhook until caller confirms with yes. Missed digits cost drive time.\\n"
+                                "Repeat it back to confirm accuracy.\n"
+                                "4. ISSUE DESCRIPTION: Ask them to briefly describe the problem "
+                                "(e.g., 'broken AC', 'burst pipe under kitchen sink', 'no hot water').\n"
+                                "NEVER send an intake form SMS to home services callers.\n"
+                                "NEVER ask them to click a link or fill out a form.\n"
+                                "Once you have all four data points, say exactly: "
+                                "'Perfect — I have your address and issue logged. I am sending this directly "
+                                "to our dispatch team right now. They will text you shortly with your "
+                                "technician arrival window. Is there anything else I can help with?'\n"
+                                "Then trigger the dispatch confirmation SMS and push to Zapier.\n"
+                            )
+                            if service_areas:
+                                area_list = ", ".join(str(a) for a in service_areas)
+                                compliance_rule += (
+                                    f"SERVICE AREA POLICY: Covered areas: {area_list}. "
+                                    "If address is outside this area, do NOT decline. Say: "
+                                    "I have your address logged. You are slightly outside our "
+                                    "standard service radius, but I am flagging this as a "
+                                    "priority review for our dispatch manager. They will "
+                                    "reach out shortly to confirm. "
+                                    "Status: OUT_OF_AREA_REVIEW, still push to Zapier.\\n"
                                 )
-                            logger.debug(f"Twilio TimeLimit={_limit}s for {call_sid}")
-                    except Exception as _tl: logger.debug(f"TimeLimit: {_tl}")
 
-                    # Load business config + memories
-                    business_cfg = await get_business_config(to_number)
-                    business_id  = business_cfg.get("business_id", "")
-                    biz_name     = (business_cfg.get("businesses") or {}).get("name", "this business")
-                    settings     = business_cfg.get("settings_business") or {}
-                    custom_instr = settings.get("aria_personality") or ""
-                    hours        = settings.get("business_hours") or "Mon-Fri 9AM-5PM"
-                    tz               = settings.get("timezone") or "America/Denver"
-                    max_call_mins    = int(settings.get("max_call_duration_minutes") or 10)
-                    memories         = business_cfg.get("memories") or []
-
-                    memory_block = build_memory_block(memories)
-
-                    # ── Pull all config sections ──────────────────────────
-                    ai_cfg   = business_cfg.get("ai_config") or {}
-                    ai_set   = business_cfg.get("ai_settings") or {}
-                    svc_list = business_cfg.get("services") or []
-
-                    # Brand name: prefer brand_name from settings, fall back to businesses.name
-                    biz_name = settings.get("brand_name") or biz_name
-
-                    # Aria's name (can be customized per business)
-                    aria_name = ai_cfg.get("name") or "Aria"
-
-                    # Format services as a readable menu
-                    if svc_list:
-                        svc_lines = "\n".join([
-                            f"  - {s['name']}"
-                            + (f" ({s['duration_minutes']} min)" if s.get('duration_minutes') else "")
-                            + (f" — Starts at ${s['price']}" if s.get('price') else "")
-                            + (f": {s['description']}" if s.get('description') else "")
-                            for s in svc_list
-                        ])
-                        services_block = f"\n━━━ SERVICES MENU ━━━\n{svc_lines}\n━━━ END SERVICES ━━━"
-                    else:
-                        services_block = ""
-
-                    # Custom emergency keywords (per business, or global defaults)
-                    emergency_kw = ai_set.get("emergency_keywords") or [
-                        "flooded", "sparking", "burst pipe", "gas leak",
-                        "allergic reaction", "chest pain", "not breathing",
-                        "fire", "bleeding", "emergency"
-                    ]
-                    if isinstance(emergency_kw, list):
-                        emergency_str = ", ".join(emergency_kw)
-                    else:
-                        emergency_str = str(emergency_kw)
-
-                    # Max call duration: ai_settings overrides settings_business
-                    max_call_mins = int(
-                        ai_set.get("max_call_duration_mins") or
-                        settings.get("max_call_duration_minutes") or 10
-                    )
-
-                    # Voice: ai_settings.voice_id overrides global default
-                    voice = ai_set.get("voice_id") or OPENAI_VOICE
-
-                    # Business address
-                    address = settings.get("address") or ""
-
-                    # ── Compliance: recording announcement ────────────────────
-                    announce_recording = settings.get("announce_recording", True)  # default ON — TCPA/CIPA safe harbor
-                    consent_text = (
-                        settings.get("recording_consent_text") or
-                        f"This call may be recorded and monitored for quality and training purposes."
-                    )
-                    # Industry (medical vs trades vs general) — shapes greeting style
-                    industry = (settings.get("industry_vertical") or "GENERAL_BUSINESS").upper()
-
-                    if announce_recording:
-                        # Three consent script styles — operator chooses in CRM Settings
-                        consent_style = settings.get("consent_greeting_style", "conversational")
-                        if consent_style == "formal" or "MEDICAL" in industry:
-                            disclosure = f"Please note: {consent_text}"
-                        elif consent_style == "transparent":
-                            disclosure = f"Just so you know — {consent_text.lower()} My human team also monitors these calls to make sure you get the best service."
-                        else:  # conversational (default)
-                            disclosure = f"Quick heads-up — {consent_text.lower()}"
-
-                        compliance_rule = (
-                            f"LEGAL COMPLIANCE CONFIRMED: The opening greeting already contains the required\n"
-                            f"recording and monitoring disclosure: \"{disclosure}\"\n"
-                            f"This disclosure is embedded in Part 1 of your opening — DO NOT repeat it mid-call.\n"
-                            f"The caller's continued presence on the line constitutes implied consent (TCPA/CIPA).\n"
-                            f"If a caller asks if the call is recorded, confirm it is: 'Yes, this call is recorded.'\n"
-                            f"Never deny or downplay the recording disclosure."
-                        )
-                    else:
-                        compliance_rule = (
-                            "The business has verified their state's recording laws and opted out "
-                            "of the recording announcement. Start the call naturally."
-                        )
-
-                    # ── Industry Vertical (home services vs general) ─────────────
-                    # Phase Contacts-1: medical vertical code path removed.
-                    # Product scope no longer targets HIPAA-regulated verticals;
-                    # the MEDICAL VERTICAL COMPLIANCE RULES block that used to
-                    # inject into Aria's system prompt has been retired. If/when
-                    # medical support returns, restore from git history.
-                    industry_vert    = settings.get("industry_vertical", "general")
-
-                    # ── 2-Way Industry Vertical Fork ─────────────────────────────────────
-                    # Fetch safety settings
-                    emerg_email = settings.get("emergency_contact_email", "") or ""
-                    emerg_phone = settings.get("emergency_contact_phone", "") or ""
-                    service_areas = settings.get("supported_service_areas") or []
-
-                    is_home_services = industry_vert in (
-                        "home_services", "hvac", "plumbing", "electrical",
-                        "roofing", "trades", "contractor", "home_services_trades"
-                    )
-
-                    if is_home_services:
-                        compliance_rule += (
-                            "\n\nHOME SERVICES & TRADES PROTOCOL (MANDATORY):\n"
-                            "PHYSICAL EMERGENCY PROTOCOL: If caller reports gas smell, sparking panels, active flooding, or life-threatening hazards, immediately say: Please evacuate and call 911 or your local utility company. I am flagging this as a CRITICAL emergency for our dispatch team. Then stop the booking flow.\\n"
-                            "You are dispatching for a home services company. Customers calling with "
-                            "emergencies (burst pipe, no AC, power out) need immediate help — "
-                            "do NOT send them a form or a link. Complete the entire booking over the phone.\n"
-                            "COLLECT ALL FOUR DATA POINTS VERBALLY:\n"
-                            "1. FIRST AND LAST NAME: Get both first and last name.\n"
-                            "2. CELL PHONE NUMBER: Confirm the best callback number.\n"
-                            "3. SERVICE ADDRESS: Ask 'What is the service address, including city and zip?' "
-                            "MANDATORY ADDRESS READ-BACK: After collecting the address, read it back verbatim: Just to confirm — [repeat full address] — did I get that right? Do NOT trigger the webhook until caller confirms with yes. Missed digits cost drive time.\\n"
-                            "Repeat it back to confirm accuracy.\n"
-                            "4. ISSUE DESCRIPTION: Ask them to briefly describe the problem "
-                            "(e.g., 'broken AC', 'burst pipe under kitchen sink', 'no hot water').\n"
-                            "NEVER send an intake form SMS to home services callers.\n"
-                            "NEVER ask them to click a link or fill out a form.\n"
-                            "Once you have all four data points, say exactly: "
-                            "'Perfect — I have your address and issue logged. I am sending this directly "
-                            "to our dispatch team right now. They will text you shortly with your "
-                            "technician arrival window. Is there anything else I can help with?'\n"
-                            "Then trigger the dispatch confirmation SMS and push to Zapier.\n"
-                        )
-                        if service_areas:
-                            area_list = ", ".join(str(a) for a in service_areas)
+                        else:
                             compliance_rule += (
-                                f"SERVICE AREA POLICY: Covered areas: {area_list}. "
-                                "If address is outside this area, do NOT decline. Say: "
-                                "I have your address logged. You are slightly outside our "
-                                "standard service radius, but I am flagging this as a "
-                                "priority review for our dispatch manager. They will "
-                                "reach out shortly to confirm. "
-                                "Status: OUT_OF_AREA_REVIEW, still push to Zapier.\\n"
+                                "\n\nSTANDARD BOOKING RULES:\n"
+                                "You do not need to verify age or collect date of birth. Simply ask for the "
+                                "caller's name, phone number, and preferred appointment time to finalize the "
+                                "booking. Be friendly, efficient, and conversational.\n"
+                                "MVD RULE (GENERAL): Collect First Name, Cell Phone, and reason for call. "
+                                "Do not ask for home address, email, or sensitive personal information "
+                                "unless the caller volunteers it. Once you have Name + Phone + Intent, "
+                                "offer to text them a confirmation or intake link if applicable.\n"
                             )
 
-                    else:
-                        compliance_rule += (
-                            "\n\nSTANDARD BOOKING RULES:\n"
-                            "You do not need to verify age or collect date of birth. Simply ask for the "
-                            "caller's name, phone number, and preferred appointment time to finalize the "
-                            "booking. Be friendly, efficient, and conversational.\n"
-                            "MVD RULE (GENERAL): Collect First Name, Cell Phone, and reason for call. "
-                            "Do not ask for home address, email, or sensitive personal information "
-                            "unless the caller volunteers it. Once you have Name + Phone + Intent, "
-                            "offer to text them a confirmation or intake link if applicable.\n"
-                        )
-
-                    # ── ZIP 24 / TCPA Phase 2: Self-Service Portal Push ──────────
-                    # Modeled on Pets Best IVR Phase 4. If the operator has set
-                    # a self_service_portal_url, Aria offers it for routine
-                    # requests instead of handling them verbally. Reduces phone
-                    # load AND reduces compliance surface (less data captured
-                    # per call = fewer audit records to defend).
-                    portal_url = settings.get("self_service_portal_url")
-                    if portal_url:
-                        compliance_rule += (
-                            "\n\nSELF-SERVICE PORTAL POLICY:\n"
-                            f"This business has a customer self-service portal at {portal_url}. "
-                            "If the caller is asking for ROUTINE information that exists in their "
-                            "account portal — invoice status, appointment time, cancellation, "
-                            "rescheduling, billing details — offer the portal first:\n"
-                            f"  'You can do that yourself in your customer portal — I can text you "
-                            f"a secure link to {portal_url}, or I can handle it on the phone if you'd rather.'\n"
-                            "DO NOT push the portal in any of these situations:\n"
-                            "- Caller sounds frustrated, elderly, or rushed\n"
-                            "- Emergency or urgent service request\n"
-                            "- Caller has already declined a portal offer earlier in the call\n"
-                            "- Caller specifically asks for human/voice handling\n"
-                            "- New customer who has no portal account yet\n"
-                            "Remember: the portal is an OFFER, not a deflection. If caller prefers "
-                            "the phone, handle it on the phone — never refuse service.\n"
-                        )
-
-                    # ZIP 24.1 — Detect Receptionist.co's own demo line BEFORE
-                    # the after-hours fork so we can suppress the after-hours
-                    # greeting injection on demo calls (otherwise the demo
-                    # greeting and the after-hours greeting both fire and the
-                    # caller hears two intros back-to-back).
-                    is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
-
-                    # ── After-Hours Detection ─────────────────────────────────────
-                    # Per Zero Audio Retention Policy: no voicemail — Aria takes
-                    # the message; the post-call extractor creates a lead row
-                    # in the inbox (status='new') for morning follow-up.
-                    try:
-                        from zoneinfo import ZoneInfo
-                        biz_tz  = ZoneInfo(tz)
-                        now_biz = datetime.now(biz_tz)
-                        hour    = now_biz.hour
-                        weekday = now_biz.weekday()  # 0=Mon 6=Sun
-                        # Default after-hours: outside 8am-6pm Mon-Fri
-                        is_after_hours = (hour < 8 or hour >= 18) or weekday >= 5
-                        # ZIP 24.1 fix: do NOT inject the after-hours greeting on
-                        # demo calls — the is_demo branch builds its own complete
-                        # opening and the after-hours injection caused a "double
-                        # greeting" glitch where Aria fired both intros back-to-back.
-                        if is_after_hours and not is_demo:
+                        # ── ZIP 24 / TCPA Phase 2: Self-Service Portal Push ──────────
+                        # Modeled on Pets Best IVR Phase 4. If the operator has set
+                        # a self_service_portal_url, Aria offers it for routine
+                        # requests instead of handling them verbally. Reduces phone
+                        # load AND reduces compliance surface (less data captured
+                        # per call = fewer audit records to defend).
+                        portal_url = settings.get("self_service_portal_url")
+                        if portal_url:
                             compliance_rule += (
-                                "\n\nAFTER HOURS POLICY (CRITICAL):\n"
-                                f"It is currently {now_biz.strftime('%I:%M %p %Z')} — outside business hours. "
-                                "DO NOT attempt to book an appointment right now. Instead:\n"
-                                "1. Greet warmly: 'Hi, you've reached [business]. We're currently closed, "
-                                "but I'm their AI assistant and I'm here to help!'\n"
-                                "2. Ask what you can help with or what message to pass to staff in the morning.\n"
-                                "3. Collect: caller name, phone number, and their message/request.\n"
-                                "4. Confirm: 'Perfect — a team member will reach out to you first thing in the morning!'\n"
-                                "IMPORTANT: This replaces traditional voicemail. No audio is stored — "
-                                "only this transcript becomes the CRM record (lead inbox).\n"
+                                "\n\nSELF-SERVICE PORTAL POLICY:\n"
+                                f"This business has a customer self-service portal at {portal_url}. "
+                                "If the caller is asking for ROUTINE information that exists in their "
+                                "account portal — invoice status, appointment time, cancellation, "
+                                "rescheduling, billing details — offer the portal first:\n"
+                                f"  'You can do that yourself in your customer portal — I can text you "
+                                f"a secure link to {portal_url}, or I can handle it on the phone if you'd rather.'\n"
+                                "DO NOT push the portal in any of these situations:\n"
+                                "- Caller sounds frustrated, elderly, or rushed\n"
+                                "- Emergency or urgent service request\n"
+                                "- Caller has already declined a portal offer earlier in the call\n"
+                                "- Caller specifically asks for human/voice handling\n"
+                                "- New customer who has no portal account yet\n"
+                                "Remember: the portal is an OFFER, not a deflection. If caller prefers "
+                                "the phone, handle it on the phone — never refuse service.\n"
                             )
-                    except Exception as tz_err:
-                        logger.debug(f"After-hours check: {tz_err}")
 
-                    # ── Three-part greeting composition ─────────────────────────────────────────
-                    # Part 1: Warm open — clinic-branded, editable by owner
-                    warm_open = (
-                        settings.get("greeting_warm_open") or
-                        f"Hi, thank you for calling {biz_name}!"
-                    ).strip()
+                        # ZIP 24.1 — Detect Receptionist.co's own demo line BEFORE
+                        # the after-hours fork so we can suppress the after-hours
+                        # greeting injection on demo calls (otherwise the demo
+                        # greeting and the after-hours greeting both fire and the
+                        # caller hears two intros back-to-back).
+                        is_demo = any(x in biz_name.lower() for x in ["receptionist", "receptionist.co", "receptionist, inc"])
 
-                    # Part 2: Disclosure — SYSTEM-MANAGED, NOT EDITABLE BY CLINIC
-                    # Always present. Legal protection for two-party consent states.
-                    # ZIP 24 / TCPA Phase 2: appends the outcomes disclaimer
-                    # immediately after the recording disclosure if the operator
-                    # has it enabled (default TRUE — see migration 019). This
-                    # is the verbal "I am an AI, final pricing subject to
-                    # review" line modeled on Pets Best Phase 2 outcomes
-                    # disclaimer. See research doc §5.1.
-                    outcomes_enabled = settings.get("outcomes_disclaimer_enabled", True)
-                    outcomes_text = (
-                        settings.get("outcomes_disclaimer_text") or
-                        "I'm an AI assistant — I can help you book and answer most questions, but final pricing, service availability, and appointment confirmations are subject to review by the business team."
-                    ).strip()
+                        # ── After-Hours Detection ─────────────────────────────────────
+                        # Per Zero Audio Retention Policy: no voicemail — Aria takes
+                        # the message; the post-call extractor creates a lead row
+                        # in the inbox (status='new') for morning follow-up.
+                        try:
+                            from zoneinfo import ZoneInfo
+                            biz_tz  = ZoneInfo(tz)
+                            now_biz = datetime.now(biz_tz)
+                            hour    = now_biz.hour
+                            weekday = now_biz.weekday()  # 0=Mon 6=Sun
+                            # Default after-hours: outside 8am-6pm Mon-Fri
+                            is_after_hours = (hour < 8 or hour >= 18) or weekday >= 5
+                            # ZIP 24.1 fix: do NOT inject the after-hours greeting on
+                            # demo calls — the is_demo branch builds its own complete
+                            # opening and the after-hours injection caused a "double
+                            # greeting" glitch where Aria fired both intros back-to-back.
+                            if is_after_hours and not is_demo:
+                                compliance_rule += (
+                                    "\n\nAFTER HOURS POLICY (CRITICAL):\n"
+                                    f"It is currently {now_biz.strftime('%I:%M %p %Z')} — outside business hours. "
+                                    "DO NOT attempt to book an appointment right now. Instead:\n"
+                                    "1. Greet warmly: 'Hi, you've reached [business]. We're currently closed, "
+                                    "but I'm their AI assistant and I'm here to help!'\n"
+                                    "2. Ask what you can help with or what message to pass to staff in the morning.\n"
+                                    "3. Collect: caller name, phone number, and their message/request.\n"
+                                    "4. Confirm: 'Perfect — a team member will reach out to you first thing in the morning!'\n"
+                                    "IMPORTANT: This replaces traditional voicemail. No audio is stored — "
+                                    "only this transcript becomes the CRM record (lead inbox).\n"
+                                )
+                        except Exception as tz_err:
+                            logger.debug(f"After-hours check: {tz_err}")
 
-                    legal_parts = []
-                    if announce_recording:
-                        legal_parts.append(disclosure)
-                    if outcomes_enabled and outcomes_text:
-                        legal_parts.append(outcomes_text)
-                    legal_middle = " ".join(legal_parts)
+                        # ── Three-part greeting composition ─────────────────────────────────────────
+                        # Part 1: Warm open — clinic-branded, editable by owner
+                        warm_open = (
+                            settings.get("greeting_warm_open") or
+                            f"Hi, thank you for calling {biz_name}!"
+                        ).strip()
 
-                    # Part 3: Handoff — editable, sets the AI role
-                    handoff = (
-                        settings.get("greeting_handoff") or
-                        f"I'm {aria_name}, the AI assistant. How can I help you today?"
-                    ).strip()
+                        # Part 2: Disclosure — SYSTEM-MANAGED, NOT EDITABLE BY CLINIC
+                        # Always present. Legal protection for two-party consent states.
+                        # ZIP 24 / TCPA Phase 2: appends the outcomes disclaimer
+                        # immediately after the recording disclosure if the operator
+                        # has it enabled (default TRUE — see migration 019). This
+                        # is the verbal "I am an AI, final pricing subject to
+                        # review" line modeled on Pets Best Phase 2 outcomes
+                        # disclaimer. See research doc §5.1.
+                        outcomes_enabled = settings.get("outcomes_disclaimer_enabled", True)
+                        outcomes_text = (
+                            settings.get("outcomes_disclaimer_text") or
+                            "I'm an AI assistant — I can help you book and answer most questions, but final pricing, service availability, and appointment confirmations are subject to review by the business team."
+                        ).strip()
 
-                    # Compose: [warm_open] [legal_middle] [handoff]
-                    if is_demo:
-                        opening = (
-                            f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co — "
-                            "this call is being recorded and monitored. "
-                            "You're experiencing a live demo right now! How can I help you today?"
-                        )
-                    else:
-                        parts = [warm_open]
-                        if legal_middle:
-                            parts.append(legal_middle)
-                        parts.append(handoff)
-                        opening = " ".join(parts)
+                        legal_parts = []
+                        if announce_recording:
+                            legal_parts.append(disclosure)
+                        if outcomes_enabled and outcomes_text:
+                            legal_parts.append(outcomes_text)
+                        legal_middle = " ".join(legal_parts)
 
-                    caller_last4 = from_number[-4:] if len(from_number) >= 4 else from_number
-                    caller_fmt   = from_number.replace("+1", "").strip()
-                    # Format: (720) 651-1325
-                    if len(caller_fmt) == 10:
-                        caller_fmt = f"({caller_fmt[:3]}) {caller_fmt[3:6]}-{caller_fmt[6:]}"
+                        # Part 3: Handoff — editable, sets the AI role
+                        handoff = (
+                            settings.get("greeting_handoff") or
+                            f"I'm {aria_name}, the AI assistant. How can I help you today?"
+                        ).strip()
 
-                    # ── KB RAG: embed caller's first message & retrieve top-3 chunks ──────
-                    # Runs ONCE at call start using the to_number as context seed.
-                    # Subsequent turns use the session context already in the model.
-                    kb_block = ""
-                    try:
-                        OPENAI_KEY_HTTP = os.environ.get("OPENAI_API_KEY", "")
-                        if OPENAI_KEY_HTTP and business_id:
-                            # Embed a representative query from the greeting context
-                            seed_text = f"Questions about {biz_name} services, pricing, hours, booking, contact"
-                            emb_res = httpx.post(
-                                "https://api.openai.com/v1/embeddings",
-                                headers={"Authorization": f"Bearer {OPENAI_KEY_HTTP}"},
-                                json={"model": "text-embedding-3-small", "input": seed_text},
-                                timeout=4.0,
+                        # Compose: [warm_open] [legal_middle] [handoff]
+                        if is_demo:
+                            opening = (
+                                f"Hi! I'm {aria_name}, the AI assistant for Receptionist.co — "
+                                "this call is being recorded and monitored. "
+                                "You're experiencing a live demo right now! How can I help you today?"
                             )
-                            if emb_res.status_code == 200:
-                                vec = emb_res.json()["data"][0]["embedding"]
-                                # Supabase client — must be obtained in local scope.
-                                # The media_stream handler does NOT have a module-level
-                                # `sb`; each function call that needs the DB must do
-                                # `sb = get_sb()` on its own. Previous versions of this
-                                # block referenced an undefined `sb` which surfaced as
-                                # "name 'sb' is not defined" in every call log.
-                                sb = get_sb()
-                                # Vector similarity search — top 3 chunks, allow_on_voice=true
-                                # Use match_knowledge_chunks (same function aria_agent.py uses).
-                                kb_rows = sb.rpc("match_knowledge_chunks", {
-                                    "query_embedding":   vec,
-                                    "match_business_id": business_id,
-                                    "match_threshold":   0.7,
-                                    "match_count":       3,
-                                }).execute()
-                                if kb_rows.data:
-                                    chunks = [r["content"] for r in kb_rows.data if r.get("content")]
-                                    if chunks:
-                                        kb_block = (
-                                            "\n━━━ KNOWLEDGE BASE ━━━\n"
-                                            + "\n---\n".join(chunks)
-                                            + "\n━━━ END KNOWLEDGE BASE ━━━"
-                                        )
-                                        logger.info(f"KB RAG: injected {len(chunks)} chunks for {business_id}")
-                    except Exception as kb_err:
-                        logger.warning(f"KB RAG failed (non-fatal): {kb_err}")
+                        else:
+                            parts = [warm_open]
+                            if legal_middle:
+                                parts.append(legal_middle)
+                            parts.append(handoff)
+                            opening = " ".join(parts)
 
-                    system_prompt = SYSTEM_PROMPT_BASE.format(
-                        business_name=biz_name,
-                        aria_name=aria_name,
-                        custom_instructions=compliance_rule + "\n\n" + custom_instr,
-                        datetime=datetime.now(ZoneInfo(tz)).strftime("%A %B %d %Y %I:%M %p %Z"),
-                        timezone=tz,
-                        opening_greeting=opening,
-                        business_hours=hours,
-                        business_address=address,
-                        emergency_keywords=emergency_str,
-                        caller_number=caller_fmt or "unknown",
-                        caller_last4=caller_last4 or "????",
-                    ) + memory_block + services_block + kb_block
+                        caller_last4 = from_number[-4:] if len(from_number) >= 4 else from_number
+                        caller_fmt   = from_number.replace("+1", "").strip()
+                        # Format: (720) 651-1325
+                        if len(caller_fmt) == 10:
+                            caller_fmt = f"({caller_fmt[:3]}) {caller_fmt[3:6]}-{caller_fmt[6:]}"
 
-                    # ── Session config — GA nested shape (April 2026) ─────
-                    # Second migration fix after Hotfix #1: the GA interface
-                    # rejects the flat beta shape with:
-                    #   "Unknown parameter: 'session.turn_detection'"
-                    # Everything audio-related must now live under session.audio
-                    # with input/output sub-objects. See canonical shape at:
-                    # https://platform.openai.com/docs/guides/realtime-conversations
-                    #
-                    # Key translations from beta → GA:
-                    #   turn_detection        → audio.input.turn_detection
-                    #   input_audio_format    → audio.input.format  (object, not string)
-                    #   output_audio_format   → audio.output.format (object, not string)
-                    #   input_audio_transcription → audio.input.transcription
-                    #   voice                 → audio.output.voice
-                    #   modalities: [t,a]     → output_modalities: [a] (Twilio = audio only)
-                    #   g711_ulaw             → {"type": "audio/pcmu"} (μ-law, 8kHz implicit)
-                    #   temperature: 0.7      → REMOVED (not in GA session-level examples;
-                    #                          can be re-added to response.create if needed)
-                    await openai_ws.send(json.dumps({
-                        "type": "session.update",
-                        "session": {
-                            "type": "realtime",
-                            "output_modalities": ["audio"],
-                            "instructions": system_prompt,
-                            "audio": {
-                                "input": {
-                                    # audio/pcmu = g711 μ-law 8kHz (Twilio Media Streams native format)
-                                    "format": {"type": "audio/pcmu"},
-                                    "transcription": {"model": "whisper-1"},
-                                    "turn_detection": {
-                                        "type":                "server_vad",
-                                        "threshold":           0.6,    # less sensitive = fewer false triggers
-                                        "prefix_padding_ms":   200,
-                                        "silence_duration_ms": 800,    # respond after 800ms silence
-                                        # Barge-in: when caller speaks, Aria stops immediately
-                                        "create_response":     True,
-                                        "interrupt_response":  True,   # KEY: enables true barge-in
+                        # ── KB RAG: embed caller's first message & retrieve top-3 chunks ──────
+                        # Runs ONCE at call start using the to_number as context seed.
+                        # Subsequent turns use the session context already in the model.
+                        kb_block = ""
+                        try:
+                            OPENAI_KEY_HTTP = os.environ.get("OPENAI_API_KEY", "")
+                            if OPENAI_KEY_HTTP and business_id:
+                                # Embed a representative query from the greeting context
+                                seed_text = f"Questions about {biz_name} services, pricing, hours, booking, contact"
+                                emb_res = httpx.post(
+                                    "https://api.openai.com/v1/embeddings",
+                                    headers={"Authorization": f"Bearer {OPENAI_KEY_HTTP}"},
+                                    json={"model": "text-embedding-3-small", "input": seed_text},
+                                    timeout=4.0,
+                                )
+                                if emb_res.status_code == 200:
+                                    vec = emb_res.json()["data"][0]["embedding"]
+                                    # Supabase client — must be obtained in local scope.
+                                    # The media_stream handler does NOT have a module-level
+                                    # `sb`; each function call that needs the DB must do
+                                    # `sb = get_sb()` on its own. Previous versions of this
+                                    # block referenced an undefined `sb` which surfaced as
+                                    # "name 'sb' is not defined" in every call log.
+                                    sb = get_sb()
+                                    # Vector similarity search — top 3 chunks, allow_on_voice=true
+                                    # Use match_knowledge_chunks (same function aria_agent.py uses).
+                                    kb_rows = sb.rpc("match_knowledge_chunks", {
+                                        "query_embedding":   vec,
+                                        "match_business_id": business_id,
+                                        "match_threshold":   0.7,
+                                        "match_count":       3,
+                                    }).execute()
+                                    if kb_rows.data:
+                                        chunks = [r["content"] for r in kb_rows.data if r.get("content")]
+                                        if chunks:
+                                            kb_block = (
+                                                "\n━━━ KNOWLEDGE BASE ━━━\n"
+                                                + "\n---\n".join(chunks)
+                                                + "\n━━━ END KNOWLEDGE BASE ━━━"
+                                            )
+                                            logger.info(f"KB RAG: injected {len(chunks)} chunks for {business_id}")
+                        except Exception as kb_err:
+                            logger.warning(f"KB RAG failed (non-fatal): {kb_err}")
+
+                        system_prompt = SYSTEM_PROMPT_BASE.format(
+                            business_name=biz_name,
+                            aria_name=aria_name,
+                            custom_instructions=compliance_rule + "\n\n" + custom_instr,
+                            datetime=datetime.now(ZoneInfo(tz)).strftime("%A %B %d %Y %I:%M %p %Z"),
+                            timezone=tz,
+                            opening_greeting=opening,
+                            business_hours=hours,
+                            business_address=address,
+                            emergency_keywords=emergency_str,
+                            caller_number=caller_fmt or "unknown",
+                            caller_last4=caller_last4 or "????",
+                        ) + memory_block + services_block + kb_block
+
+                        # ── Session config — GA nested shape (April 2026) ─────
+                        # Second migration fix after Hotfix #1: the GA interface
+                        # rejects the flat beta shape with:
+                        #   "Unknown parameter: 'session.turn_detection'"
+                        # Everything audio-related must now live under session.audio
+                        # with input/output sub-objects. See canonical shape at:
+                        # https://platform.openai.com/docs/guides/realtime-conversations
+                        #
+                        # Key translations from beta → GA:
+                        #   turn_detection        → audio.input.turn_detection
+                        #   input_audio_format    → audio.input.format  (object, not string)
+                        #   output_audio_format   → audio.output.format (object, not string)
+                        #   input_audio_transcription → audio.input.transcription
+                        #   voice                 → audio.output.voice
+                        #   modalities: [t,a]     → output_modalities: [a] (Twilio = audio only)
+                        #   g711_ulaw             → {"type": "audio/pcmu"} (μ-law, 8kHz implicit)
+                        #   temperature: 0.7      → REMOVED (not in GA session-level examples;
+                        #                          can be re-added to response.create if needed)
+                        await openai_ws.send(json.dumps({
+                            "type": "session.update",
+                            "session": {
+                                "type": "realtime",
+                                "output_modalities": ["audio"],
+                                "instructions": system_prompt,
+                                "audio": {
+                                    "input": {
+                                        # audio/pcmu = g711 μ-law 8kHz (Twilio Media Streams native format)
+                                        "format": {"type": "audio/pcmu"},
+                                        "transcription": {"model": "whisper-1"},
+                                        "turn_detection": {
+                                            "type":                "server_vad",
+                                            "threshold":           0.6,    # less sensitive = fewer false triggers
+                                            "prefix_padding_ms":   200,
+                                            "silence_duration_ms": 800,    # respond after 800ms silence
+                                            # Barge-in: when caller speaks, Aria stops immediately
+                                            "create_response":     True,
+                                            "interrupt_response":  True,   # KEY: enables true barge-in
+                                        },
+                                    },
+                                    "output": {
+                                        "format": {"type": "audio/pcmu"},
+                                        "voice":  voice,
                                     },
                                 },
-                                "output": {
-                                    "format": {"type": "audio/pcmu"},
-                                    "voice":  voice,
-                                },
-                            },
-                            "tools": [
-                                {
-                                    "type": "function",
-                                    "name": "check_availability",
-                                    "description": "Check the business calendar for available appointment times on a specific date.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "date": {
-                                                "type": "string",
-                                                "description": "The date to check, formatted as YYYY-MM-DD."
+                                "tools": [
+                                    {
+                                        "type": "function",
+                                        "name": "check_availability",
+                                        "description": "Check the business calendar for available appointment times on a specific date.",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "date": {
+                                                    "type": "string",
+                                                    "description": "The date to check, formatted as YYYY-MM-DD."
+                                                },
+                                                "preference": {
+                                                    "type": "string",
+                                                    "enum": ["morning", "afternoon", "any"],
+                                                    "description": "Caller's preferred time of day."
+                                                }
                                             },
-                                            "preference": {
-                                                "type": "string",
-                                                "enum": ["morning", "afternoon", "any"],
-                                                "description": "Caller's preferred time of day."
-                                            }
-                                        },
-                                        "required": ["date"]
-                                    }
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "transfer_call",
-                                    "description": "Transfer the call to a human immediately. Use when caller has a true emergency, repeatedly demands to speak to a human, or the situation requires human judgment. Tell caller 'Please hold while I connect you' BEFORE calling this function.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "reason": {
-                                                "type": "string",
-                                                "description": "Short 3-5 word summary of why transferring (e.g. 'Burst pipe in basement')"
-                                            }
-                                        },
-                                        "required": ["reason"]
-                                    }
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "book_appointment",
-                                    "description": "Book an appointment after caller confirms a time. Requires name, email, phone, and startTime.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "startTime": {
-                                                "type": "string",
-                                                "description": "Start time in ISO 8601 format e.g. 2026-04-02T14:00:00Z"
+                                            "required": ["date"]
+                                        }
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "transfer_call",
+                                        "description": "Transfer the call to a human immediately. Use when caller has a true emergency, repeatedly demands to speak to a human, or the situation requires human judgment. Tell caller 'Please hold while I connect you' BEFORE calling this function.",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "reason": {
+                                                    "type": "string",
+                                                    "description": "Short 3-5 word summary of why transferring (e.g. 'Burst pipe in basement')"
+                                                }
                                             },
-                                            "name":  {"type": "string"},
-                                            "email": {"type": "string"},
-                                            "phone": {"type": "string"},
-                                            "special_instructions": {
-                                                "type": "string",
-                                                "description": "Gate codes, pets, parking notes, accessibility needs, or any arrival instructions the caller provided. Leave null if none."
-                                            }
-                                        },
-                                        "required": ["startTime", "name", "email", "phone"]
-                                    }
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "flag_shared_line",
-                                    "description": "Call this when a caller corrects Aria's name greeting — e.g. says 'I am not John'. Fires an alert to the CRM without writing to the existing contact.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "original_name": {"type": "string", "description": "The name Aria greeted the caller with"},
-                                            "caller_stated_name": {"type": "string", "description": "The name the caller said they actually are"}
-                                        },
-                                        "required": ["original_name", "caller_stated_name"]
-                                    }
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "handle_dnc_request",
-                                    "description": "Call this IMMEDIATELY when a caller says any variant of: do not call me, take me off your list, remove me, do not contact me, add me to do not call list. This is a legal TCPA requirement.",
-                                    "parameters": {"type": "object", "properties": {}, "required": []}
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "handle_data_deletion_request",
-                                    "description": "Call this when a caller requests deletion of their personal data — GDPR right to be forgotten, CCPA deletion request, or any variant of 'delete my information'.",
-                                    "parameters": {"type": "object", "properties": {}, "required": []}
-                                },
-                                {
-                                    "type": "function",
-                                    "name": "log_sms_consent",
-                                    "description": "Call this IMMEDIATELY after the caller verbally affirms (yes/sure/okay/that's fine/go ahead) the SMS opt-in disclosure required by Identity Lock rule 9. This records a TCPA-compliant consent event BEFORE any SMS is sent. If the caller does NOT affirm, do not call this tool — offer email instead. The verbatim_affirmation parameter must contain the EXACT WORDS the caller said (e.g. 'yes that works', 'sure go ahead', 'okay'). The scope parameter must match the kind of message you are about to send.",
-                                    "parameters": {
-                                        "type": "object",
-                                        "properties": {
-                                            "scope": {
-                                                "type": "string",
-                                                "enum": [
-                                                    "appointment_confirmation",
-                                                    "booking_link",
-                                                    "quote",
-                                                    "invoice",
-                                                    "intake_form",
-                                                    "review_request",
-                                                    "follow_up_reminder",
-                                                    "marketing"
-                                                ],
-                                                "description": "What category of SMS the caller just consented to receive."
+                                            "required": ["reason"]
+                                        }
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "book_appointment",
+                                        "description": "Book an appointment after caller confirms a time. Requires name, email, phone, and startTime.",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "startTime": {
+                                                    "type": "string",
+                                                    "description": "Start time in ISO 8601 format e.g. 2026-04-02T14:00:00Z"
+                                                },
+                                                "name":  {"type": "string"},
+                                                "email": {"type": "string"},
+                                                "phone": {"type": "string"},
+                                                "special_instructions": {
+                                                    "type": "string",
+                                                    "description": "Gate codes, pets, parking notes, accessibility needs, or any arrival instructions the caller provided. Leave null if none."
+                                                }
                                             },
-                                            "verbatim_affirmation": {
-                                                "type": "string",
-                                                "description": "The exact words the caller used to grant consent. Required for FCC 1:1 audit defense."
-                                            }
-                                        },
-                                        "required": ["scope", "verbatim_affirmation"]
+                                            "required": ["startTime", "name", "email", "phone"]
+                                        }
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "flag_shared_line",
+                                        "description": "Call this when a caller corrects Aria's name greeting — e.g. says 'I am not John'. Fires an alert to the CRM without writing to the existing contact.",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "original_name": {"type": "string", "description": "The name Aria greeted the caller with"},
+                                                "caller_stated_name": {"type": "string", "description": "The name the caller said they actually are"}
+                                            },
+                                            "required": ["original_name", "caller_stated_name"]
+                                        }
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "handle_dnc_request",
+                                        "description": "Call this IMMEDIATELY when a caller says any variant of: do not call me, take me off your list, remove me, do not contact me, add me to do not call list. This is a legal TCPA requirement.",
+                                        "parameters": {"type": "object", "properties": {}, "required": []}
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "handle_data_deletion_request",
+                                        "description": "Call this when a caller requests deletion of their personal data — GDPR right to be forgotten, CCPA deletion request, or any variant of 'delete my information'.",
+                                        "parameters": {"type": "object", "properties": {}, "required": []}
+                                    },
+                                    {
+                                        "type": "function",
+                                        "name": "log_sms_consent",
+                                        "description": "Call this IMMEDIATELY after the caller verbally affirms (yes/sure/okay/that's fine/go ahead) the SMS opt-in disclosure required by Identity Lock rule 9. This records a TCPA-compliant consent event BEFORE any SMS is sent. If the caller does NOT affirm, do not call this tool — offer email instead. The verbatim_affirmation parameter must contain the EXACT WORDS the caller said (e.g. 'yes that works', 'sure go ahead', 'okay'). The scope parameter must match the kind of message you are about to send.",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "scope": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "appointment_confirmation",
+                                                        "booking_link",
+                                                        "quote",
+                                                        "invoice",
+                                                        "intake_form",
+                                                        "review_request",
+                                                        "follow_up_reminder",
+                                                        "marketing"
+                                                    ],
+                                                    "description": "What category of SMS the caller just consented to receive."
+                                                },
+                                                "verbatim_affirmation": {
+                                                    "type": "string",
+                                                    "description": "The exact words the caller used to grant consent. Required for FCC 1:1 audit defense."
+                                                }
+                                            },
+                                            "required": ["scope", "verbatim_affirmation"]
+                                        }
                                     }
-                                }
-                            ],
-                            "tool_choice": "auto",
-                        }
-                    }))
+                                ],
+                                "tool_choice": "auto",
+                            }
+                        }))
 
-                    # ── Register active call in DB (powers live dashboard counter) ──
-                    asyncio.create_task(upsert_active_call(
-                        business_id, call_sid, from_number, "in-progress"
-                    ))
+                        # ── Register active call in DB (powers live dashboard counter) ──
+                        asyncio.create_task(upsert_active_call(
+                            business_id, call_sid, from_number, "in-progress"
+                        ))
 
-                    # Initial greeting trigger
-                    await openai_ws.send(json.dumps({
-                        "type": "conversation.item.create",
-                        "item": {
-                            "type":    "message",
-                            "role":    "user",
-                            "content": [{"type": "input_text", "text": "The phone just rang. Answer it now with your mandatory opening greeting."}]
-                        }
-                    }))
-                    await openai_ws.send(json.dumps({"type": "response.create"}))
+                        # Initial greeting trigger
+                        await openai_ws.send(json.dumps({
+                            "type": "conversation.item.create",
+                            "item": {
+                                "type":    "message",
+                                "role":    "user",
+                                "content": [{"type": "input_text", "text": "The phone just rang. Answer it now with your mandatory opening greeting."}]
+                            }
+                        }))
+                        await openai_ws.send(json.dumps({"type": "response.create"}))
 
-                elif event == "media":
-                    # ── April 28, 2026 — graceful close on transfer ──────
-                    # When /transfer-call (mode=browser) closes openai_ws
-                    # for browser takeover, the next iteration of this
-                    # loop would call openai_ws.send() and raise
-                    # ConnectionClosedOK. Without this guard the
-                    # exception escapes the asyncio task and surfaces as
-                    # "Task exception was never retrieved" — the
-                    # transfer-call HTTP response then failed with 500.
-                    #
-                    # The state-name check is the fast path. The
-                    # try/except handles the TOCTOU race between check
-                    # and send: openai_ws can close between those two
-                    # lines if the transfer-call route runs in parallel.
-                    #
-                    # On catch: stop forwarding (call_active=False),
-                    # log debug, exit the loop. Outer asyncio.wait at
-                    # ~line 2714 resolves naturally; receive_from_openai
-                    # already exits cleanly when openai_ws closes.
-                    if not openai_ws.state.name == "CLOSED":
-                        try:
-                            await openai_ws.send(json.dumps({
-                                "type":  "input_audio_buffer.append",
-                                "audio": data["media"]["payload"],
-                            }))
-                        except websockets.exceptions.ConnectionClosed:
-                            logger.debug(
-                                f"openai_ws closed mid-forward for {call_sid} "
-                                "(likely browser-takeover transfer); "
-                                "ending receive_from_twilio cleanly"
-                            )
-                            call_active = False
-                            break
+                    elif event == "media":
+                        # ── April 28, 2026 — graceful close on transfer ──────
+                        # When /transfer-call (mode=browser) closes openai_ws
+                        # for browser takeover, the next iteration of this
+                        # loop would call openai_ws.send() and raise
+                        # ConnectionClosedOK. Without this guard the
+                        # exception escapes the asyncio task and surfaces as
+                        # "Task exception was never retrieved" — the
+                        # transfer-call HTTP response then failed with 500.
+                        #
+                        # The state-name check is the fast path. The
+                        # try/except handles the TOCTOU race between check
+                        # and send: openai_ws can close between those two
+                        # lines if the transfer-call route runs in parallel.
+                        #
+                        # On catch: stop forwarding (call_active=False),
+                        # log debug, exit the loop. Outer asyncio.wait at
+                        # ~line 2714 resolves naturally; receive_from_openai
+                        # already exits cleanly when openai_ws closes.
+                        if not openai_ws.state.name == "CLOSED":
+                            try:
+                                await openai_ws.send(json.dumps({
+                                    "type":  "input_audio_buffer.append",
+                                    "audio": data["media"]["payload"],
+                                }))
+                            except websockets.exceptions.ConnectionClosed:
+                                logger.debug(
+                                    f"openai_ws closed mid-forward for {call_sid} "
+                                    "(likely browser-takeover transfer); "
+                                    "ending receive_from_twilio cleanly"
+                                )
+                                call_active = False
+                                break
 
-                elif event == "stop":
-                    logger.info(f"Stream stopped: {stream_sid}")
-                    # ── Instant UI update: delete active call NOW ──
-                    # save_call_record runs async later — UI clears immediately
-                    call_active = False  # prevent further upserts
-                    if call_sid and business_id:
-                        asyncio.create_task(delete_active_call(call_sid))
-                    break
+                    elif event == "stop":
+                        logger.info(f"Stream stopped: {stream_sid}")
+                        # ── Instant UI update: delete active call NOW ──
+                        # save_call_record runs async later — UI clears immediately
+                        call_active = False  # prevent further upserts
+                        if call_sid and business_id:
+                            asyncio.create_task(delete_active_call(call_sid))
+                        break
+
+            # ── April 28, 2026 (Day 9) — top-level exception handler ──────
+            # The audio-forward send at the inner try/except handles the
+            # openai_ws ConnectionClosed race during /transfer-call. But
+            # OTHER errors can fire from the Twilio websocket itself:
+            #   • RuntimeError("WebSocket is not connected. Need to call
+            #     accept first") — Starlette raises this when iter_text()
+            #     is called on a half-closed Twilio WS during transfer.
+            #   • WebSocketDisconnect — Twilio side closes cleanly.
+            #   • Other ConnectionClosed cases not caught at the inner site.
+            # Without a top-level handler these crash the asyncio task and
+            # surface as "Task exception was never retrieved" → /transfer-call
+            # responds with 500. Catch broadly here, log, and exit cleanly.
+            # Outer asyncio.wait at the gather site resolves naturally.
+            except WebSocketDisconnect:
+                logger.info(f"Twilio WS disconnected (clean) for {call_sid}")
+                call_active = False
+            except RuntimeError as rt_err:
+                # Starlette raises RuntimeError when operating on a closed WS
+                logger.info(
+                    f"Twilio WS RuntimeError for {call_sid} "
+                    f"(likely closed mid-transfer): {rt_err}"
+                )
+                call_active = False
+            except websockets.exceptions.ConnectionClosed as cc_err:
+                # Backstop for any openai_ws.send not caught at inner site
+                logger.info(
+                    f"openai_ws ConnectionClosed for {call_sid}: {cc_err}"
+                )
+                call_active = False
+            except Exception as ex:
+                # Final safety net. Log with traceback so unknown failures
+                # surface in Railway logs but don't escape as task exception.
+                logger.exception(
+                    f"receive_from_twilio unhandled exception for {call_sid}: {ex}"
+                )
+                call_active = False
 
         async def receive_from_openai():
             nonlocal is_responding, last_speech_at, current_item_id, stream_sid, call_sid, start_time, business_id, business_cfg, max_call_mins, audio_ms_sent
@@ -3574,7 +3678,16 @@ async def warm_handoff(req: Request):
         await openai_ws.send(json.dumps({
             "type": "response.create",
             "response": {
-                "modalities": ["text", "audio"],
+                # April 26, 2026 — OpenAI GA Realtime API migration:
+                #   modalities: [t,a]     → output_modalities: [a] (Twilio = audio only)
+                # Beta API accepted "modalities" with text+audio; GA renamed it to
+                # "output_modalities" and made it single-valued. Twilio media streams
+                # are audio-only, so we drop "text" entirely. Without this fix:
+                #   ERROR:call-handler:OpenAI error: 'Unknown parameter: response.modalities'
+                # fires every warm-handoff. Same fix already in session.update at
+                # ~line 2379. Restored April 28 (Day 9) — this had been silently
+                # dropped during the cross-day call_handler.py merges.
+                "output_modalities": ["audio"],
                 "instructions": prompt,
             }
         }))
